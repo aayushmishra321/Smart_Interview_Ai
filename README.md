@@ -393,10 +393,6 @@ docker-compose -f docker-compose.prod.yml up -d
 This project is licensed under the MIT License.
 
 
-## 🤝 Support
-
-For support, email: aayush.mishra17596@sakec.ac.in
-
 ## 🎉 Acknowledgments
 
 - Google Gemini AI for interview question generation
