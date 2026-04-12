@@ -392,10 +392,6 @@ docker-compose -f docker-compose.prod.yml up -d
 
 This project is licensed under the MIT License.
 
-## 👥 Contributors
-
-- Aayush Mishra - Full Stack Development
-- Vikas Mishra - Backend & AI Integration
 
 ## 🤝 Support
 
