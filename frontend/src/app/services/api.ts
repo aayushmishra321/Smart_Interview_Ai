@@ -5,10 +5,14 @@ class APIService {
   private api: AxiosInstance;
 
   constructor() {
-    const baseURL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:5001';
+    // Ensure baseURL always ends with /api
+    // Guards against VITE_API_BASE_URL being set without the /api suffix
+    const raw = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:5001/api';
+    const baseURL = raw.endsWith('/api') ? raw : raw.replace(/\/$/, '') + '/api';
+
     this.api = axios.create({
       baseURL,
-      timeout: 60000, // 60 seconds for interview creation (question generation can take time)
+      timeout: 60000,
       headers: {
         'Content-Type': 'application/json',
       },

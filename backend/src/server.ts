@@ -48,19 +48,6 @@ const io = new Server(server, {
 
 const PORT = parseInt(process.env.PORT || '5001', 10);
 
-const checkPort = (port: number): Promise<boolean> => {
-  return new Promise((resolve) => {
-    const server = require('net').createServer();
-    server.listen(port, () => {
-      server.close();
-      resolve(true);
-    });
-    server.on('error', () => {
-      resolve(false);
-    });
-  });
-};
-
 // Database connection with improved error handling
 const connectDB = async () => {
   try {
@@ -239,57 +226,26 @@ process.on('unhandledRejection', (reason, promise) => {
 // Start server
 const startServer = async () => {
   try {
-    console.log('=== STARTING BACKEND SERVER ===');
-    console.log('Timestamp:', new Date().toISOString());
-    console.log('Node version:', process.version);
-    console.log('Environment:', process.env.NODE_ENV || 'development');
-    console.log('Port:', PORT);
-    console.log('MongoDB URI:', process.env.MONGODB_URI ? 'Configured' : 'NOT CONFIGURED');
-    
-    // Check if port is available
-    console.log(`Checking if port ${PORT} is available...`);
-    const isPortAvailable = await checkPort(PORT);
-    if (!isPortAvailable) {
-      console.error(`❌ Port ${PORT} is already in use!`);
-      console.error('Please kill the process using this port or use a different port.');
-      console.error(`To kill process on Windows: netstat -ano | findstr :${PORT}`);
-      console.error('Then: taskkill /PID <PID> /F');
-      process.exit(1);
-    }
-    console.log(`✅ Port ${PORT} is available`);
-    
-    console.log('Connecting to database...');
+    logger.info('=== STARTING BACKEND SERVER ===');
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`Port: ${PORT}`);
+    logger.info(`MongoDB URI: ${process.env.MONGODB_URI ? 'Configured' : 'NOT CONFIGURED'}`);
+
     await connectDB();
-    
-    console.log('Initializing services...');
     await initializeServices();
 
-    console.log(`Starting HTTP server on port ${PORT}...`);
-    server.listen(PORT, () => {
-      console.log('=== SERVER STARTED SUCCESSFULLY ===');
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`📡 API Base URL: http://localhost:${PORT}`);
-      console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
-      console.log(`📊 API Routes: http://localhost:${PORT}/api/*`);
-      console.log('=================================');
-      
-      logger.info(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+    server.listen(PORT, '0.0.0.0', () => {
+      logger.info(`🚀 Server running on port ${PORT}`);
+      logger.info(`🏥 Health: http://localhost:${PORT}/health`);
+      logger.info(`📡 API: http://localhost:${PORT}/api`);
     });
-    
+
     server.on('error', (error: any) => {
-      console.error('=== SERVER ERROR ===');
-      console.error('Error:', error);
-      if (error.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use!`);
-        console.error('Please kill the process or use a different port.');
-      }
+      logger.error('Server error:', error);
       process.exit(1);
     });
-    
+
   } catch (error) {
-    console.error('=== FAILED TO START SERVER ===');
-    console.error('Error:', error);
     logger.error('Failed to start server:', error);
     process.exit(1);
   }
