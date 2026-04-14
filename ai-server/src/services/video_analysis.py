@@ -85,72 +85,101 @@ class VideoAnalysisService:
     async def analyze_eye_contact(self, video_data: str, duration: float) -> Dict[str, Any]:
         """Analyze eye contact patterns throughout video"""
         try:
-            # Decode base64 video data
             video_bytes = base64.b64decode(video_data)
-            
-            # Create temporary video file
-            temp_video = io.BytesIO(video_bytes)
-            
-            # Process video frames
-            eye_contact_data = []
-            total_frames = 0
-            eye_contact_frames = 0
-            
-            # Note: This is a simplified implementation
-            # In production, you'd process the actual video frames
-            
-            # Simulate eye contact analysis
-            # This would be replaced with actual video processing
-            eye_contact_percentage = np.random.uniform(60, 85)  # Placeholder
-            
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
+            try:
+                cap = cv2.VideoCapture(tmp_path)
+                if not cap.isOpened():
+                    raise ValueError("Could not open video")
+
+                fps = cap.get(cv2.CAP_PROP_FPS) or 25
+                frame_interval = max(1, int(fps * 2))  # sample every 2 s
+                frame_number = 0
+                eye_contact_scores: List[float] = []
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    if frame_number % frame_interval == 0:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        score = self._estimate_eye_contact_from_frame(rgb)
+                        eye_contact_scores.append(score)
+                    frame_number += 1
+
+                cap.release()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+            if not eye_contact_scores:
+                return {"eye_contact_percentage": 0.0, "assessment": "No frames analyzed", "timeline": []}
+
+            avg = float(np.mean(eye_contact_scores))
             return {
-                "eye_contact_percentage": round(eye_contact_percentage, 1),
-                "total_frames_analyzed": total_frames,
-                "eye_contact_frames": eye_contact_frames,
-                "assessment": self._assess_eye_contact(eye_contact_percentage),
-                "timeline": eye_contact_data
+                "eye_contact_percentage": round(avg, 1),
+                "total_frames_analyzed": len(eye_contact_scores),
+                "assessment": self._assess_eye_contact(avg),
+                "timeline": [{"frame": i, "score": round(s, 1)} for i, s in enumerate(eye_contact_scores)],
             }
-            
+
         except Exception as e:
             logger.error(f"Eye contact analysis error: {e}")
-            return {
-                "eye_contact_percentage": 70.0,
-                "assessment": "Good eye contact",
-                "timeline": []
-            }
+            return {"eye_contact_percentage": 0.0, "assessment": "Analysis failed", "timeline": []}
 
     async def analyze_posture(self, video_data: str, duration: float) -> Dict[str, Any]:
         """Analyze posture and body language"""
         try:
-            # Decode base64 video data
             video_bytes = base64.b64decode(video_data)
-            
-            # Process video for posture analysis
-            posture_scores = []
-            gesture_count = 0
-            
-            # Simulate posture analysis
-            # This would be replaced with actual video processing
-            posture_score = np.random.uniform(70, 90)  # Placeholder
-            
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
+            try:
+                cap = cv2.VideoCapture(tmp_path)
+                if not cap.isOpened():
+                    raise ValueError("Could not open video")
+
+                fps = cap.get(cv2.CAP_PROP_FPS) or 25
+                frame_interval = max(1, int(fps * 2))
+                frame_number = 0
+                posture_scores: List[float] = []
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    if frame_number % frame_interval == 0:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        score = self._calculate_posture_score_from_frame(rgb)
+                        if score is not None:
+                            posture_scores.append(score)
+                    frame_number += 1
+
+                cap.release()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+            if not posture_scores:
+                return {"posture_score": 0.0, "posture_assessment": "No pose detected", "body_language_notes": []}
+
+            avg = float(np.mean(posture_scores))
             return {
-                "posture_score": round(posture_score, 1),
-                "gesture_count": gesture_count,
-                "posture_assessment": self._assess_posture(posture_score),
-                "body_language_notes": [
-                    "Maintains upright posture",
-                    "Appropriate hand gestures",
-                    "Good shoulder alignment"
-                ]
+                "posture_score": round(avg, 1),
+                "posture_assessment": self._assess_posture(avg),
+                "frames_analyzed": len(posture_scores),
+                "body_language_notes": self._generate_posture_notes(avg),
             }
-            
+
         except Exception as e:
             logger.error(f"Posture analysis error: {e}")
-            return {
-                "posture_score": 75.0,
-                "posture_assessment": "Good posture",
-                "body_language_notes": []
-            }
+            return {"posture_score": 0.0, "posture_assessment": "Analysis failed", "body_language_notes": []}
 
     async def analyze_comprehensive(self, video_data: str, duration: float) -> Dict[str, Any]:
         """Comprehensive video analysis"""
@@ -295,22 +324,108 @@ class VideoAnalysisService:
             return {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
 
     def _estimate_eye_contact(self, landmarks) -> float:
-        """Estimate eye contact score from face landmarks"""
+        """Estimate eye contact score from face landmarks using gaze direction"""
         try:
-            # Simplified eye contact estimation
-            # In production, you'd analyze eye gaze direction
-            return np.random.uniform(60, 90)  # Placeholder
-        except:
-            return 70.0
+            # Use iris landmarks (indices 468-477 in refined face mesh)
+            # Left iris center: 468, Right iris center: 473
+            h, w = 480, 640  # default; actual shape passed separately
+
+            left_iris = landmarks.landmark[468]
+            right_iris = landmarks.landmark[473]
+            nose_tip = landmarks.landmark[1]
+
+            # Horizontal deviation from nose (camera center proxy)
+            left_dev = abs(left_iris.x - nose_tip.x)
+            right_dev = abs(right_iris.x - nose_tip.x)
+            avg_dev = (left_dev + right_dev) / 2.0
+
+            # Vertical deviation
+            left_vdev = abs(left_iris.y - nose_tip.y)
+            right_vdev = abs(right_iris.y - nose_tip.y)
+            avg_vdev = (left_vdev + right_vdev) / 2.0
+
+            # Score: lower deviation = better eye contact
+            # Deviation of 0 → 100, deviation of 0.15+ → 0
+            h_score = max(0.0, 1.0 - (avg_dev / 0.12)) * 100
+            v_score = max(0.0, 1.0 - (avg_vdev / 0.12)) * 100
+            return round((h_score * 0.6 + v_score * 0.4), 1)
+        except Exception:
+            return 0.0
+
+    def _estimate_eye_contact_from_frame(self, rgb_frame: np.ndarray) -> float:
+        """Run face mesh on a single frame and return eye contact score"""
+        try:
+            results = self.face_mesh.process(rgb_frame)
+            if not results.multi_face_landmarks:
+                return 0.0
+            return self._estimate_eye_contact(results.multi_face_landmarks[0])
+        except Exception:
+            return 0.0
 
     def _calculate_posture_score(self, landmarks) -> float:
-        """Calculate posture score from pose landmarks"""
+        """Calculate posture score from pose landmarks using shoulder/spine alignment"""
         try:
-            # Simplified posture scoring
-            # In production, you'd analyze shoulder alignment, spine curvature, etc.
-            return np.random.uniform(70, 95)  # Placeholder
-        except:
-            return 80.0
+            return self._score_pose_landmarks(landmarks)
+        except Exception:
+            return 0.0
+
+    def _calculate_posture_score_from_frame(self, rgb_frame: np.ndarray) -> Optional[float]:
+        """Run pose detection on a single frame and return posture score"""
+        try:
+            results = self.pose.process(rgb_frame)
+            if not results.pose_landmarks:
+                return None
+            return self._score_pose_landmarks(results.pose_landmarks)
+        except Exception:
+            return None
+
+    def _score_pose_landmarks(self, landmarks) -> float:
+        """
+        Score posture using shoulder and hip alignment.
+        Returns 0-100.
+        """
+        try:
+            mp_pose = self.mp_pose
+            lm = landmarks.landmark
+
+            left_shoulder  = lm[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+            right_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+            left_hip       = lm[mp_pose.PoseLandmark.LEFT_HIP.value]
+            right_hip      = lm[mp_pose.PoseLandmark.RIGHT_HIP.value]
+            nose           = lm[mp_pose.PoseLandmark.NOSE.value]
+
+            # 1. Shoulder level (y difference — lower is better)
+            shoulder_tilt = abs(left_shoulder.y - right_shoulder.y)
+            shoulder_score = max(0.0, 1.0 - shoulder_tilt / 0.1) * 100
+
+            # 2. Spine vertical alignment: nose should be between shoulders horizontally
+            shoulder_mid_x = (left_shoulder.x + right_shoulder.x) / 2
+            spine_offset = abs(nose.x - shoulder_mid_x)
+            spine_score = max(0.0, 1.0 - spine_offset / 0.15) * 100
+
+            # 3. Hip level
+            hip_tilt = abs(left_hip.y - right_hip.y)
+            hip_score = max(0.0, 1.0 - hip_tilt / 0.1) * 100
+
+            # 4. Forward lean: nose y vs shoulder y (nose too far below = slouching)
+            lean = nose.y - ((left_shoulder.y + right_shoulder.y) / 2)
+            lean_score = max(0.0, 1.0 - abs(lean) / 0.3) * 100
+
+            overall = shoulder_score * 0.3 + spine_score * 0.3 + hip_score * 0.2 + lean_score * 0.2
+            return round(overall, 1)
+        except Exception:
+            return 0.0
+
+    def _generate_posture_notes(self, score: float) -> List[str]:
+        """Generate human-readable posture notes"""
+        if score >= 85:
+            return ["Excellent upright posture", "Good shoulder alignment", "Confident body language"]
+        elif score >= 70:
+            return ["Good posture overall", "Minor alignment improvements possible"]
+        elif score >= 55:
+            return ["Sit up straighter", "Keep shoulders level", "Avoid leaning forward"]
+        else:
+            return ["Significant posture issues detected", "Sit upright with back straight", "Keep shoulders back and level"]
 
     def _assess_eye_contact(self, percentage: float) -> str:
         """Assess eye contact quality"""

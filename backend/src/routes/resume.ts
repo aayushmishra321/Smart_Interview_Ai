@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import { body, validationResult } from 'express-validator';
@@ -128,7 +128,7 @@ router.post('/upload', (req, res, next) => {
           public_id: `resume_${req.user.userId}_${Date.now()}`,
         });
         storageType = 'cloudinary';
-        logger.info(`✓ Cloudinary upload successful: ${uploadResult.secure_url}`);
+        logger.info(`âœ“ Cloudinary upload successful: ${uploadResult.secure_url}`);
       } catch (cloudinaryError: any) {
         logger.warn('Cloudinary upload failed, falling back to local storage');
         logger.warn('Cloudinary error:', cloudinaryError.message);
@@ -140,7 +140,7 @@ router.post('/upload', (req, res, next) => {
           userId: req.user.userId,
         });
         storageType = 'local';
-        logger.info(`✓ Local storage upload successful: ${uploadResult.secure_url}`);
+        logger.info(`âœ“ Local storage upload successful: ${uploadResult.secure_url}`);
       }
     }
 
@@ -149,44 +149,48 @@ router.post('/upload', (req, res, next) => {
     // Call Python AI server for resume parsing
     let parsedData: any = null;
     try {
-      const pythonServerUrl = process.env.PYTHON_API_URL || 'http://localhost:8000';
-      const apiKey = process.env.PYTHON_AI_SERVER_API_KEY || 'smart-interview-ai-python-server-key-2024';
-      
-      logger.info(`Calling Python AI server at: ${pythonServerUrl}/api/resume/parse`);
-      
-      // Create FormData for Python server
-      const FormData = require('form-data');
-      const formData = new FormData();
-      formData.append('resume_file', req.file.buffer, {
-        filename: req.file.originalname,
-        contentType: req.file.mimetype
-      });
+      const pythonServerUrl = process.env.PYTHON_AI_SERVER_URL;
+      const apiKey = process.env.PYTHON_AI_SERVER_API_KEY;
 
-      const parseResponse = await axios.post(
-        `${pythonServerUrl}/api/resume/parse`,
-        formData,
-        {
-          headers: {
-            ...formData.getHeaders(),
-            'Authorization': `Bearer ${apiKey}`
-          },
-          timeout: 30000 // 30 second timeout
-        }
-      );
-
-      if (parseResponse.data && parseResponse.data.success) {
-        parsedData = parseResponse.data.data;
-        logger.info('✓ Resume parsed successfully by AI server');
-        logger.info(`Extracted ${parsedData.skills?.length || 0} skill categories`);
+      if (!pythonServerUrl || !apiKey) {
+        logger.warn('PYTHON_AI_SERVER_URL or PYTHON_AI_SERVER_API_KEY not set â€” skipping AI parsing');
       } else {
-        logger.warn('AI parsing returned unsuccessful response');
+        logger.info(`Calling Python AI server at: ${pythonServerUrl}/api/resume/parse`);
+
+        // Create FormData for Python server
+        const FormData = require('form-data');
+        const formData = new FormData();
+        formData.append('resume_file', req.file.buffer, {
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+        });
+
+        const parseResponse = await axios.post(
+          `${pythonServerUrl}/api/resume/parse`,
+          formData,
+          {
+            headers: {
+              ...formData.getHeaders(),
+              Authorization: `Bearer ${apiKey}`,
+            },
+            timeout: 30000,
+          }
+        );
+
+        if (parseResponse.data && parseResponse.data.success) {
+          parsedData = parseResponse.data.data;
+          logger.info('âœ“ Resume parsed successfully by AI server');
+          logger.info(`Extracted ${parsedData.skills?.length || 0} skill categories`);
+        } else {
+          logger.warn('AI parsing returned unsuccessful response');
+        }
       }
     } catch (parseError: any) {
       logger.error('AI parsing error:', parseError.message);
       if (parseError.response) {
         logger.error('AI server response:', parseError.response.data);
       }
-      // Continue without parsing - we'll use default data
+      // Continue without parsing â€” upload still succeeds
     }
 
     // Extract skills for database storage
@@ -268,6 +272,14 @@ router.post('/upload', (req, res, next) => {
     const resumeScore = calculateScore();
     const subScores = calculateSubScores();
 
+    // Sanitize education â€” fill missing fields with defaults
+    const sanitizedEducation = educationData.map((edu: any) => ({
+      degree:      edu.degree      || edu.qualification || 'Not specified',
+      institution: edu.institution || edu.university    || edu.college || 'Not specified',
+      year:        parseInt(edu.year) || new Date().getFullYear(),
+      gpa:         parseFloat(edu.gpa) || undefined,
+    })).filter((edu: any) => edu.degree !== 'Not specified' || edu.institution !== 'Not specified');
+
     // Create resume record in database with parsed data
     const resume = new Resume({
       userId: req.user.userId,
@@ -280,12 +292,7 @@ router.post('/upload', (req, res, next) => {
       analysis: {
         skills: skillsToStore,
         experience: experienceYears,
-        education: educationData.map((edu: any) => ({
-          degree: edu.degree || '',
-          institution: edu.institution || '',
-          year: parseInt(edu.year) || new Date().getFullYear(),
-          gpa: parseFloat(edu.gpa) || undefined
-        })),
+        education: sanitizedEducation,
         certifications: certificationsData,
         achievements: achievementsData,
         industries: [],
@@ -626,8 +633,43 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   try {
-    // TODO: Delete from database and Cloudinary
-    logger.info(`Resume deleted: ${id} by user ${req.user!.userId}`);
+    const resume = await Resume.findOne({ _id: id, userId: req.user!.userId });
+
+    if (!resume) {
+      return res.status(404).json({
+        success: false,
+        error: 'Resume not found',
+      });
+    }
+
+    // Delete from Cloudinary if stored there
+    if (resume.storageType === 'cloudinary' && resume.publicId) {
+      try {
+        await cloudinaryService.deleteFile(resume.publicId);
+        logger.info(`Deleted from Cloudinary: ${resume.publicId}`);
+      } catch (cloudErr: any) {
+        logger.warn(`Cloudinary delete failed (continuing): ${cloudErr.message}`);
+      }
+    }
+
+    // Delete from local storage if stored locally
+    if (resume.storageType === 'local' && resume.fileUrl) {
+      try {
+        const path = require('path');
+        const fs = require('fs');
+        const urlPath = resume.fileUrl.replace(/^https?:\/\/[^\/]+/, '');
+        const filePath = path.join(process.cwd(), 'uploads', urlPath.replace('/uploads/', ''));
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          logger.info(`Deleted local file: ${filePath}`);
+        }
+      } catch (fsErr: any) {
+        logger.warn(`Local file delete failed (continuing): ${fsErr.message}`);
+      }
+    }
+
+    await Resume.findByIdAndDelete(id);
+    logger.info(`Resume ${id} deleted by user ${req.user!.userId}`);
 
     res.json({
       success: true,
@@ -638,153 +680,88 @@ router.delete('/:id', asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete resume',
+      message: error.message,
     });
   }
 }));
 
-// View resume (open in browser)
+// Cloudinary URL is never exposed to the browser
 router.get('/:id/view', asyncHandler(async (req, res) => {
   const { id } = req.params;
-
   try {
-    const resume = await Resume.findOne({
-      _id: id,
-      userId: req.user!.userId,
-    });
+    const resume = await Resume.findOne({ _id: id, userId: req.user!.userId });
+    if (!resume) return res.status(404).json({ success: false, error: 'Resume not found' });
 
-    if (!resume) {
-      return res.status(404).json({
-        success: false,
-        error: 'Resume not found',
+    logger.info(`View resume ${id} storageType=${resume.storageType}`);
+
+    if (resume.storageType === 'cloudinary' && resume.fileUrl) {
+      // Fetch the file from Cloudinary on the server side, stream it to the client
+      const fileRes = await axios.get(resume.fileUrl, {
+        responseType: 'stream',
+        timeout: 15000,
       });
-    }
-
-    logger.info(`Viewing resume: ${id} for user ${req.user!.userId}`);
-    logger.info(`Storage type: ${resume.storageType}, fileUrl: ${resume.fileUrl}`);
-
-    // For Cloudinary URLs, redirect with inline display
-    if (resume.storageType === 'cloudinary' && resume.fileUrl.includes('cloudinary.com')) {
-      let viewUrl = resume.fileUrl;
-      viewUrl = viewUrl.replace('/upload/', '/upload/fl_attachment:false/');
-      logger.info(`Redirecting to Cloudinary URL: ${viewUrl}`);
-      return res.redirect(viewUrl);
-    }
-
-    // For local storage, serve the file directly
-    if (resume.storageType === 'local' || !resume.storageType) {
-      // fileUrl for local storage is the public URL path
-      // We need to construct the actual file path
-      const path = require('path');
-      const fs = require('fs');
-      
-      // Extract filename from fileUrl (e.g., /uploads/resumes/filename.pdf)
-      const urlPath = resume.fileUrl.replace(/^https?:\/\/[^\/]+/, ''); // Remove domain
-      const filePath = path.join(process.cwd(), 'uploads', urlPath.replace('/uploads/', ''));
-      
-      logger.info(`Serving local file: ${filePath}`);
-      
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
-        logger.error(`File not found: ${filePath}`);
-        return res.status(404).json({
-          success: false,
-          error: 'Resume file not found on server',
-        });
-      }
-
-      // Set headers for inline viewing
       res.setHeader('Content-Type', resume.mimeType || 'application/pdf');
       res.setHeader('Content-Disposition', 'inline');
-      
-      // Stream the file
-      const fileStream = fs.createReadStream(filePath);
-      fileStream.pipe(res);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      (fileRes.data as any).pipe(res);
       return;
     }
 
-    // Fallback: redirect to fileUrl
-    logger.info(`Redirecting to fileUrl: ${resume.fileUrl}`);
-    return res.redirect(resume.fileUrl);
-
+    // Local storage
+    const path = require('path');
+    const fs = require('fs');
+    const urlPath = resume.fileUrl.replace(/^https?:\/\/[^/]+/, '');
+    const filePath = path.join(process.cwd(), 'uploads', urlPath.replace('/uploads/', ''));
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: 'Resume file not found on server' });
+    }
+    res.setHeader('Content-Type', resume.mimeType || 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    fs.createReadStream(filePath).pipe(res);
   } catch (error: any) {
     logger.error('Error viewing resume:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to view resume',
-      message: error.message,
-    });
+    res.status(500).json({ success: false, error: 'Failed to view resume', message: error.message });
   }
 }));
 
-// Download resume
+// Download resume â€” backend fetches from Cloudinary internally and streams to client
+// Cloudinary URL is never exposed to the browser
 router.get('/:id/download', asyncHandler(async (req, res) => {
   const { id } = req.params;
-
   try {
-    const resume = await Resume.findOne({
-      _id: id,
-      userId: req.user!.userId,
-    });
+    const resume = await Resume.findOne({ _id: id, userId: req.user!.userId });
+    if (!resume) return res.status(404).json({ success: false, error: 'Resume not found' });
 
-    if (!resume) {
-      return res.status(404).json({
-        success: false,
-        error: 'Resume not found',
+    logger.info(`Download resume ${id} storageType=${resume.storageType}`);
+
+    if (resume.storageType === 'cloudinary' && resume.fileUrl) {
+      // Fetch the file from Cloudinary on the server side, stream it to the client
+      const fileRes = await axios.get(resume.fileUrl, {
+        responseType: 'stream',
+        timeout: 15000,
       });
-    }
-
-    logger.info(`Downloading resume: ${id} for user ${req.user!.userId}`);
-    logger.info(`Storage type: ${resume.storageType}, fileUrl: ${resume.fileUrl}`);
-
-    // For Cloudinary URLs, redirect with download flag
-    if (resume.storageType === 'cloudinary' && resume.fileUrl.includes('cloudinary.com')) {
-      let downloadUrl = resume.fileUrl;
-      downloadUrl = downloadUrl.replace('/upload/', `/upload/fl_attachment:${resume.filename}/`);
-      logger.info(`Redirecting to Cloudinary download URL: ${downloadUrl}`);
-      return res.redirect(downloadUrl);
-    }
-
-    // For local storage, serve the file with download header
-    if (resume.storageType === 'local' || !resume.storageType) {
-      const path = require('path');
-      const fs = require('fs');
-      
-      // Extract filename from fileUrl
-      const urlPath = resume.fileUrl.replace(/^https?:\/\/[^\/]+/, '');
-      const filePath = path.join(process.cwd(), 'uploads', urlPath.replace('/uploads/', ''));
-      
-      logger.info(`Serving local file for download: ${filePath}`);
-      
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
-        logger.error(`File not found: ${filePath}`);
-        return res.status(404).json({
-          success: false,
-          error: 'Resume file not found on server',
-        });
-      }
-
-      // Set headers for download
-      res.setHeader('Content-Type', resume.mimeType || 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${resume.filename}"`);
-      
-      // Stream the file
-      const fileStream = fs.createReadStream(filePath);
-      fileStream.pipe(res);
+      const safeFilename = resume.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      res.setHeader('Content-Type', resume.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      (fileRes.data as any).pipe(res);
       return;
     }
 
-    // Fallback: redirect to fileUrl
-    logger.info(`Redirecting to fileUrl: ${resume.fileUrl}`);
-    return res.redirect(resume.fileUrl);
-
+    // Local storage
+    const path = require('path');
+    const fs = require('fs');
+    const urlPath = resume.fileUrl.replace(/^https?:\/\/[^/]+/, '');
+    const filePath = path.join(process.cwd(), 'uploads', urlPath.replace('/uploads/', ''));
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: 'Resume file not found on server' });
+    }
+    res.setHeader('Content-Type', resume.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${resume.filename}"`);
+    fs.createReadStream(filePath).pipe(res);
   } catch (error: any) {
     logger.error('Error downloading resume:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to download resume',
-      message: error.message,
-    });
+    res.status(500).json({ success: false, error: 'Failed to download resume', message: error.message });
   }
 }));
 

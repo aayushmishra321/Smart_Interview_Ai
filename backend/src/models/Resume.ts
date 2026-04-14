@@ -99,15 +99,15 @@ const resumeSchema = new Schema<IResume>({
     education: [{
       degree: {
         type: String,
-        required: true,
+        default: 'Not specified',
       },
       institution: {
         type: String,
-        required: true,
+        default: 'Not specified',
       },
       year: {
         type: Number,
-        required: true,
+        default: new Date().getFullYear(),
       },
       gpa: {
         type: Number,

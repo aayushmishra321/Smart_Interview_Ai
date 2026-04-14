@@ -146,9 +146,13 @@ export const useInterviewStore = create<InterviewState>((set, get) => ({
           isLoading: false,
         });
         
-        // Get the first question
-        console.log('Getting first question...');
-        await get().getNextQuestion();
+        // Only auto-fetch the first question if we don't already have one.
+        // CodingInterviewPage fetches its own question on mount — avoid duplicate.
+        const { currentQuestion } = get();
+        if (!currentQuestion) {
+          console.log('Getting first question...');
+          await get().getNextQuestion();
+        }
       } else {
         const errorMsg = response.error || 'Failed to start interview';
         console.error('Failed to start interview:', errorMsg);
@@ -222,40 +226,46 @@ export const useInterviewStore = create<InterviewState>((set, get) => ({
 
   getNextQuestion: async () => {
     const { currentInterview, currentSession } = get();
-    
-    if (!currentInterview && !currentSession) {
-      console.error('No current interview or session');
-      return;
-    }
-    
-    // Get interview ID from either currentInterview or currentSession
-    const interviewId = currentSession?.interviewId || 
-                       (currentInterview as any)?._id || 
-                       currentInterview?.id;
-    
+
+    const interviewId =
+      currentSession?.interviewId ||
+      (currentInterview as any)?._id ||
+      currentInterview?.id;
+
     if (!interviewId) {
-      console.error('No interview ID available');
-      set({ error: 'Interview ID not found' });
+      console.warn('getNextQuestion: no interviewId yet, skipping');
       return;
     }
-    
+
     console.log('Getting next question for interview:', interviewId);
-    
+
     try {
       const response = await interviewService.getNextQuestion(interviewId);
       console.log('Next question response:', response);
-      
-      if (response.success && response.data) {
-        console.log('Next question received:', response.data);
+
+      // Backend now returns completed:true with data:null when all questions done
+      const completed = (response as any).completed === true;
+
+      if (response.success && response.data && !completed) {
         set((state) => ({
           currentQuestion: response.data,
           currentQuestionIndex: state.currentQuestionIndex + 1,
         }));
       } else {
-        console.log('No more questions available');
+        // No more questions — clear current question so UI can show "done" state
+        console.log('All questions answered — interview complete');
         set({ currentQuestion: null });
       }
     } catch (error: any) {
+      if (
+        error?.code === 'ERR_CANCELED' ||
+        error?.message === 'canceled' ||
+        error?.name === 'CanceledError' ||
+        error?.name === 'AbortError'
+      ) {
+        console.warn('getNextQuestion: request canceled — ignoring');
+        return;
+      }
       console.error('Get next question error:', error);
       set({ error: error.message || 'Failed to get next question' });
     }
@@ -263,39 +273,35 @@ export const useInterviewStore = create<InterviewState>((set, get) => ({
 
   submitResponse: async (response: Partial<Response>) => {
     const { currentInterview, currentQuestion, currentSession } = get();
-    
+
     if (!currentQuestion) {
       console.error('No current question');
       return;
     }
-    
-    // Get interview ID
-    const interviewId = currentSession?.interviewId || 
-                       (currentInterview as any)?._id || 
-                       currentInterview?.id;
-    
+
+    const interviewId =
+      currentSession?.interviewId ||
+      (currentInterview as any)?._id ||
+      currentInterview?.id;
+
     if (!interviewId) {
       console.error('No interview ID available');
       set({ error: 'Interview ID not found' });
       return;
     }
-    
+
     console.log('Submitting response for interview:', interviewId, 'question:', currentQuestion.id);
-    
+
     try {
-      await interviewService.submitResponse(
-        interviewId,
-        currentQuestion.id,
-        response
-      );
-      
+      await interviewService.submitResponse(interviewId, currentQuestion.id, response);
       console.log('Response submitted successfully');
-      
-      // Get next question after submitting response
-      await get().getNextQuestion();
+      // NOTE: Do NOT call getNextQuestion here.
+      // CodingInterviewPage.handleSubmit controls the next-question flow
+      // to avoid duplicate calls and race conditions.
     } catch (error: any) {
       console.error('Submit response error:', error);
       set({ error: error.message || 'Failed to submit response' });
+      throw error; // re-throw so the page can catch it
     }
   },
 

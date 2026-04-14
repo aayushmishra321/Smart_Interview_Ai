@@ -305,31 +305,33 @@ router.get('/system-metrics', asyncHandler(async (_req: Request, res: Response) 
   });
 }));
 
-// Get error logs
-router.get('/error-logs', asyncHandler(async (req: Request, res: Response) => {
-  const limit = parseInt(req.query.limit as string) || 50;
-  
-  // This is a simplified version - in production, you'd read from actual log files
-  // For now, return mock data structure
-  const logs = [
-    {
-      severity: 'error',
-      message: 'Database connection timeout',
-      timestamp: new Date(Date.now() - 3600000),
-      stack: 'Error: Connection timeout...'
-    },
-    {
-      severity: 'warning',
-      message: 'High API response time detected',
-      timestamp: new Date(Date.now() - 600000),
-      stack: null
-    }
-  ];
+// Get error logs — reads from real Winston log file
+router.get('/error-logs', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const logFile = require('path').join(process.cwd(), 'logs', 'error.log');
+  const fs = require('fs');
 
-  res.json({
-    success: true,
-    data: logs.slice(0, limit)
-  });
+  if (!fs.existsSync(logFile)) {
+    res.json({ success: true, data: [], message: 'No error log file found yet' });
+    return;
+  }
+
+  try {
+    const content = fs.readFileSync(logFile, 'utf8');
+    const lines = content
+      .split('\n')
+      .filter((l: string) => l.trim())
+      .map((l: string) => {
+        try { return JSON.parse(l); } catch { return null; }
+      })
+      .filter(Boolean)
+      .reverse()
+      .slice(0, limit);
+
+    res.json({ success: true, data: lines, total: lines.length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Failed to read log file', message: err.message });
+  }
 }));
 
 // Get recent activity
@@ -356,31 +358,55 @@ router.get('/activity', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
-// Get AI performance metrics
+// Get AI performance metrics — real DB aggregations
 router.get('/ai-metrics', asyncHandler(async (_req: Request, res: Response) => {
-  // Calculate AI performance based on interview data
   const completedInterviews = await Interview.find({
     status: 'completed',
-    'analysis.overallScore': { $exists: true }
-  }).select('analysis createdAt');
+    'analysis.overallScore': { $exists: true, $gt: 0 },
+  }).select('analysis createdAt feedback');
 
-  // Calculate metrics
-  const accuracy = completedInterviews.length > 0 ? 94 : 0; // Mock for now
-  const avgResponseTime = 88; // Mock
-  const userSatisfaction = 92; // Mock
-  const questionQuality = 89; // Mock
-  const feedbackAccuracy = 91; // Mock
+  const totalAnalyzed = completedInterviews.length;
+
+  // Average overall score as accuracy proxy
+  const accuracy = totalAnalyzed > 0
+    ? Math.round(
+        completedInterviews.reduce((sum, i) => sum + (i.analysis?.overallScore ?? 0), 0) / totalAnalyzed
+      )
+    : 0;
+
+  // Average content metrics
+  const avgRelevance = totalAnalyzed > 0
+    ? Math.round(
+        completedInterviews.reduce((sum, i) => sum + (i.analysis?.contentMetrics?.relevanceScore ?? 0), 0) / totalAnalyzed
+      )
+    : 0;
+
+  const avgClarity = totalAnalyzed > 0
+    ? Math.round(
+        completedInterviews.reduce((sum, i) => sum + (i.analysis?.contentMetrics?.communicationClarity ?? 0), 0) / totalAnalyzed
+      )
+    : 0;
+
+  // Interviews with feedback = user satisfaction proxy
+  const withFeedback = completedInterviews.filter(i => i.feedback?.overallRating).length;
+  const userSatisfaction = withFeedback > 0
+    ? Math.round(
+        completedInterviews
+          .filter(i => i.feedback?.overallRating)
+          .reduce((sum, i) => sum + (i.feedback?.overallRating ?? 0), 0) / withFeedback
+      )
+    : 0;
 
   res.json({
     success: true,
     data: {
       accuracy,
-      responseTime: avgResponseTime,
+      avgRelevanceScore: avgRelevance,
+      avgClarityScore: avgClarity,
       userSatisfaction,
-      questionQuality,
-      feedbackAccuracy,
-      totalAnalyzed: completedInterviews.length
-    }
+      totalAnalyzed,
+      note: 'All values derived from real interview data',
+    },
   });
 }));
 

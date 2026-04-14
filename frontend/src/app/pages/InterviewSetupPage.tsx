@@ -105,7 +105,9 @@ export function InterviewSetupPage() {
         formData.append('resume', resumeFile);
         const uploadRes = await apiService.upload('/resume/upload', formData);
         if (!uploadRes.success) { toast.error(uploadRes.message || 'Resume upload failed'); return; }
-        resumeId = uploadRes.data._id;
+        // Handle both _id and id field names
+        resumeId = (uploadRes.data as any)?._id?.toString() || (uploadRes.data as any)?.id?.toString();
+        if (!resumeId) { toast.error('Resume saved but ID missing — try again'); return; }
       }
 
       const payload = {

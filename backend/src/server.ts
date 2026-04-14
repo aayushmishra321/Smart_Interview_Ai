@@ -2,6 +2,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Override DNS to use Google's servers — fixes querySrv ECONNREFUSED on restrictive ISP DNS
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
@@ -16,9 +20,29 @@ const app = createApp();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:5175', 'http://localhost:5174', process.env.FRONTEND_URL].filter(Boolean),
+    origin: (origin, callback) => {
+      // Allow requests with no origin (server-to-server, health checks)
+      if (!origin) return callback(null, true);
+
+      const allowed = [
+        'http://localhost:5175',
+        'http://localhost:5174',
+        'http://localhost:3000',
+        process.env.FRONTEND_URL,
+      ].filter(Boolean) as string[];
+
+      // Also allow any *.vercel.app preview URL
+      const isVercelPreview = /^https:\/\/.*\.vercel\.app$/.test(origin);
+
+      if (allowed.includes(origin) || isVercelPreview) {
+        callback(null, true);
+      } else {
+        logger.warn(`Socket.IO CORS blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
   },
 });
 
@@ -47,9 +71,10 @@ const connectDB = async () => {
 
     // Enhanced MongoDB connection options
     const options = {
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      serverSelectionTimeoutMS: 10000, // Keep trying to send operations for 10 seconds
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 30000,
     };
 
     // Connection event handlers

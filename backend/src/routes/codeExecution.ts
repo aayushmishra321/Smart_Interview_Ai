@@ -215,4 +215,57 @@ router.get(
   })
 );
 
+// Dynamic hints endpoint — uses Gemini to generate problem-specific hints
+router.post(
+  '/hints',
+  authenticateToken,
+  [
+    body('questionTitle').isString().notEmpty(),
+    body('language').isString().notEmpty(),
+  ],
+  asyncHandler(async (req, res) => {
+    const { questionTitle, questionDescription, language } = req.body;
+    try {
+      const geminiService = (await import('../services/gemini')).default;
+      const result = await geminiService.generateFollowUpQuestions({
+        originalQuestion: questionTitle,
+        userAnswer: '',
+        role: 'coding interview candidate',
+        context: {
+          description: questionDescription || '',
+          language,
+          type: 'coding_hints',
+          instruction: `Generate 3 progressive hints for solving this coding problem in ${language}. 
+            Start with a high-level approach hint, then a data structure hint, then an algorithm hint.
+            Do NOT give away the full solution. Return JSON: {"questions": ["hint1", "hint2", "hint3"]}`,
+        },
+      });
+
+      // generateFollowUpQuestions returns string[] — use as hints
+      const hints = Array.isArray(result) && result.length > 0
+        ? result
+        : [
+            `Think about what data structure would let you look up values in O(1) time.`,
+            `Consider storing values you've already seen as you iterate through the array.`,
+            `For each element, check if its complement (target - element) exists in your lookup structure.`,
+          ];
+
+      res.json({ success: true, data: { hints } });
+    } catch (error: any) {
+      logger.error('Hints generation error:', error);
+      // Return generic hints on failure
+      res.json({
+        success: true,
+        data: {
+          hints: [
+            `Break the problem into smaller sub-problems.`,
+            `Consider the time and space complexity trade-offs.`,
+            `Think about edge cases: empty input, single element, duplicates.`,
+          ],
+        },
+      });
+    }
+  })
+);
+
 export default router;

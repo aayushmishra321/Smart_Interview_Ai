@@ -187,7 +187,7 @@ class CodeExecutionService {
   }
 
   /**
-   * Execute code with test cases
+   * Execute code with test cases — runs each test case independently
    */
   async executeWithTestCases(request: CodeExecutionRequest): Promise<CodeExecutionResult> {
     if (!request.testCases || request.testCases.length === 0) {
@@ -197,28 +197,37 @@ class CodeExecutionService {
     const testResults = [];
 
     for (const testCase of request.testCases) {
-      // Wrap user code to call the solution function with test input
       const wrappedCode = this.wrapCodeWithTestCase(
         request.language,
         request.code,
         testCase.input
       );
 
+      logger.info(`Executing test case — language: ${request.language}, input: ${testCase.input.substring(0, 80)}`);
+
       const result = await this.execute({
         ...request,
         code: wrappedCode,
-        stdin: '', // No stdin needed, we're calling the function directly
+        stdin: '',
       });
 
-      const actualOutput = (result.output || '').trim();
-      const expectedOutput = testCase.expectedOutput.trim();
+      const rawOutput = (result.output || '').trim();
+      const rawExpected = testCase.expectedOutput.trim();
+
+      // Normalize both sides for comparison (handles [0,1] vs [0, 1] etc.)
+      const normalizedActual   = this.normalizeOutput(rawOutput);
+      const normalizedExpected = this.normalizeOutput(rawExpected);
+      const passed = normalizedActual === normalizedExpected;
+
+      logger.info(`Test result — actual: "${rawOutput}", expected: "${rawExpected}", passed: ${passed}`);
 
       testResults.push({
         input: testCase.input,
-        expectedOutput: testCase.expectedOutput,
-        actualOutput: actualOutput,
-        passed: actualOutput === expectedOutput,
+        expectedOutput: rawExpected,
+        actualOutput: rawOutput,
+        passed,
         executionTime: result.executionTime,
+        error: result.error,
       });
     }
 
@@ -232,88 +241,280 @@ class CodeExecutionService {
   }
 
   /**
-   * Wrap user code to call solution function with test input
+   * Normalize output for comparison — handles JSON arrays/objects with different spacing
+   */
+  private normalizeOutput(value: string): string {
+    const trimmed = value.trim();
+    try {
+      // Parse and re-stringify to normalize spacing/ordering
+      return JSON.stringify(JSON.parse(trimmed));
+    } catch {
+      // Not JSON — return trimmed lowercase string
+      return trimmed.toLowerCase();
+    }
+  }
+
+  /**
+   * Build a self-contained executable file that:
+   * 1. Includes the user's code
+   * 2. Parses the test input correctly (handles multi-line inputs like "[1,2]\n9")
+   * 3. Detects the function signature and calls it with the right arguments
+   * 4. Prints the result as JSON
    */
   private wrapCodeWithTestCase(language: string, userCode: string, testInput: string): string {
+    // Split multi-line input into individual argument lines
+    const inputLines = testInput.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
     switch (language) {
-      case 'python':
-        // Parse JSON string and convert to Python literal
-        try {
-          const parsedInput = JSON.parse(testInput);
-          const pythonInput = JSON.stringify(parsedInput);
-          return `import json
+
+      // ── Python ──────────────────────────────────────────────────────────────
+      case 'python': {
+        const inputLinesJson = JSON.stringify(inputLines);
+        return `import json, ast, sys
 
 ${userCode}
 
-# Test execution
-test_input = json.loads('${pythonInput.replace(/'/g, "\\'")}')
-result = solution(test_input)
-print(result)`;
-        } catch (e) {
-          // If not valid JSON, treat as Python literal
-          return `${userCode}
+# ── Test harness ──────────────────────────────────────────────────────────────
+def _parse(s):
+    s = s.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        try:
+            return ast.literal_eval(s)
+        except Exception:
+            return s
 
-# Test execution
-test_input = ${testInput}
-result = solution(test_input)
-print(result)`;
-        }
+_input_lines = ${inputLinesJson}
+_args = [_parse(line) for line in _input_lines]
 
+# Detect the user-defined function (first def in their code)
+import inspect, types
+_user_funcs = [
+    name for name, obj in list(globals().items())
+    if callable(obj) and isinstance(obj, types.FunctionType)
+    and not name.startswith('_')
+]
+
+if not _user_funcs:
+    print("ERROR: No function found in submitted code", file=sys.stderr)
+    sys.exit(1)
+
+_fn = globals()[_user_funcs[0]]
+_result = _fn(*_args)
+print(json.dumps(_result))
+`;
+      }
+
+      // ── JavaScript / TypeScript ──────────────────────────────────────────────
       case 'javascript':
-      case 'typescript':
-        try {
-          const parsedInput = JSON.parse(testInput);
-          const jsInput = JSON.stringify(parsedInput);
-          return `${userCode}
+      case 'typescript': {
+        const inputLinesJson = JSON.stringify(inputLines);
+        return `${userCode}
 
-// Test execution
-const testInput = ${jsInput};
-const result = solution(testInput);
-console.log(result);`;
-        } catch (e) {
-          return `${userCode}
+// ── Test harness ──────────────────────────────────────────────────────────────
+const _inputLines = ${inputLinesJson};
+function _parse(s) {
+  try { return JSON.parse(s); } catch(e) { return s; }
+}
+const _args = _inputLines.map(_parse);
 
-// Test execution
-const testInput = ${testInput};
-const result = solution(testInput);
-console.log(result);`;
-        }
+// Find the user-defined function
+const _userFuncs = Object.keys(globalThis).filter(k => typeof globalThis[k] === 'function' && !k.startsWith('_'));
+// Also check local scope via eval trick — use the last defined function name from code
+const _fnMatch = \`${userCode.replace(/`/g, '\\`')}\`.match(/function\\s+(\\w+)\\s*\\(/g);
+let _result;
+if (_fnMatch) {
+  const _fnName = _fnMatch[_fnMatch.length - 1].replace('function ', '').replace(/\\s*\\(.*/, '');
+  try {
+    _result = eval(_fnName + '(..._args)');
+  } catch(e) {
+    _result = 'ERROR: ' + e.message;
+  }
+} else {
+  _result = 'ERROR: No function found';
+}
+console.log(JSON.stringify(_result));
+`;
+      }
 
-      case 'java':
-        return `import com.google.gson.Gson;
+      // ── Java ─────────────────────────────────────────────────────────────────
+      case 'java': {
+        // Build argument parsing for each input line
+        const argParsers = inputLines.map((line, i) => {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('[')) {
+            return `        // arg${i}: array from "${trimmed}"
+        int[] arg${i} = parseIntArray("${trimmed.replace(/"/g, '\\"')}");`;
+          }
+          return `        int arg${i} = Integer.parseInt("${trimmed}");`;
+        }).join('\n');
+
+        const argList = inputLines.map((_, i) => `arg${i}`).join(', ');
+
+        return `import java.util.*;
 
 ${userCode}
 
 public class Main {
+    static int[] parseIntArray(String s) {
+        s = s.trim().replaceAll("[\\\\[\\\\]]", "");
+        if (s.isEmpty()) return new int[0];
+        String[] parts = s.split(",");
+        int[] arr = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) arr[i] = Integer.parseInt(parts[i].trim());
+        return arr;
+    }
+
     public static void main(String[] args) {
-        Gson gson = new Gson();
-        Object testInput = gson.fromJson("${testInput.replace(/"/g, '\\"')}", Object.class);
-        Solution solution = new Solution();
-        Object result = solution.solution(testInput);
-        System.out.println(result);
+        Solution sol = new Solution();
+${argParsers}
+        Object result = sol.twoSum(${argList});
+        System.out.println(Arrays.toString((int[]) result).replace(", ", ",").replace(" ", ""));
     }
 }`;
+      }
 
-      case 'cpp':
-        return `#include <iostream>
-#include <string>
+      // ── C++ ──────────────────────────────────────────────────────────────────
+      case 'cpp': {
+        const argParsers = inputLines.map((line, i) => {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('[')) {
+            return `    // parse array arg${i}
+    vector<int> arg${i};
+    {
+        string s = "${trimmed.replace(/"/g, '\\"')}";
+        s.erase(remove(s.begin(), s.end(), '['), s.end());
+        s.erase(remove(s.begin(), s.end(), ']'), s.end());
+        stringstream ss(s);
+        string token;
+        while(getline(ss, token, ',')) arg${i}.push_back(stoi(token));
+    }`;
+          }
+          return `    int arg${i} = ${trimmed};`;
+        }).join('\n');
+
+        const argList = inputLines.map((_, i) => `arg${i}`).join(', ');
+
+        return `#include <bits/stdc++.h>
 using namespace std;
 
 ${userCode}
 
 int main() {
-    // Note: C++ test case parsing is simplified
-    Solution solution;
-    auto result = solution.solution(${testInput});
-    cout << result << endl;
+    Solution sol;
+${argParsers}
+    auto result = sol.twoSum(${argList});
+    cout << "[";
+    for (int i = 0; i < (int)result.size(); i++) {
+        if (i) cout << ",";
+        cout << result[i];
+    }
+    cout << "]" << endl;
     return 0;
 }`;
+      }
+
+      // ── C# ───────────────────────────────────────────────────────────────────
+      case 'csharp': {
+        const argParsers = inputLines.map((line, i) => {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('[')) {
+            return `        int[] arg${i} = "${trimmed.replace(/"/g, '\\"')}".Trim('[',']').Split(',').Select(int.Parse).ToArray();`;
+          }
+          return `        int arg${i} = int.Parse("${trimmed}");`;
+        }).join('\n');
+
+        const argList = inputLines.map((_, i) => `arg${i}`).join(', ');
+
+        return `using System;
+using System.Linq;
+
+${userCode}
+
+class Program {
+    static void Main() {
+${argParsers}
+        var sol = new Solution();
+        var result = sol.TwoSum(${argList});
+        Console.WriteLine("[" + string.Join(",", result) + "]");
+    }
+}`;
+      }
+
+      // ── Go ───────────────────────────────────────────────────────────────────
+      case 'go': {
+        return `package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "strconv"
+    "strings"
+)
+
+${userCode}
+
+func parseIntSlice(s string) []int {
+    s = strings.Trim(s, "[] ")
+    parts := strings.Split(s, ",")
+    result := make([]int, 0, len(parts))
+    for _, p := range parts {
+        n, _ := strconv.Atoi(strings.TrimSpace(p))
+        result = append(result, n)
+    }
+    return result
+}
+
+func main() {
+    inputLines := ${JSON.stringify(inputLines)}
+    _ = inputLines
+    nums := parseIntSlice(inputLines[0])
+    target, _ := strconv.Atoi(strings.TrimSpace(inputLines[1]))
+    result := twoSum(nums, target)
+    out, _ := json.Marshal(result)
+    fmt.Println(string(out))
+}`;
+      }
+
+      // ── Ruby ─────────────────────────────────────────────────────────────────
+      case 'ruby': {
+        const inputLinesJson = JSON.stringify(inputLines);
+        return `require 'json'
+
+${userCode}
+
+_lines = ${inputLinesJson}
+_args = _lines.map { |l| begin; JSON.parse(l); rescue; l; end }
+_result = method(:solution).call(*_args)
+puts JSON.generate(_result)
+`;
+      }
+
+      // ── Rust ─────────────────────────────────────────────────────────────────
+      case 'rust': {
+        return `use std::str::FromStr;
+
+${userCode}
+
+fn parse_int_vec(s: &str) -> Vec<i32> {
+    let s = s.trim().trim_matches(|c| c == '[' || c == ']');
+    s.split(',').filter_map(|x| i32::from_str(x.trim()).ok()).collect()
+}
+
+fn main() {
+    let lines: Vec<&str> = vec![${inputLines.map(l => `"${l.replace(/"/g, '\\"')}"`).join(', ')}];
+    let nums = parse_int_vec(lines[0]);
+    let target: i32 = lines[1].trim().parse().unwrap();
+    let result = two_sum(nums, target);
+    let out: Vec<String> = result.iter().map(|x| x.to_string()).collect();
+    println!("[{}]", out.join(","));
+}`;
+      }
 
       default:
-        // For other languages, return code as-is and hope it works
-        return `${userCode}
-
-print(solution(${testInput}))`;
+        // Fallback — just append a generic call
+        return `${userCode}\n\nprint(solution(${inputLines.join(', ')}))`;
     }
   }
 

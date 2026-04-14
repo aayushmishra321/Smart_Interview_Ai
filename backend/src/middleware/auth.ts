@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User';
-import { extractTokenFromRequest, verifyToken, TokenPayload } from '../utils/auth';
+import { extractTokenFromRequest, verifyToken } from '../utils/auth';
 import logger from '../utils/logger';
 
 // Extend Request interface to include user
@@ -22,128 +21,48 @@ declare global {
 export async function authenticateToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const token = extractTokenFromRequest(req);
-    
+
     if (!token) {
-      res.status(401).json({
-        success: false,
-        error: 'Access token is required',
-      });
+      res.status(401).json({ success: false, error: 'Access token is required' });
       return;
     }
 
-    let decoded: TokenPayload;
-    let isAuth0Token = false;
-
-    // Try to verify as regular JWT first
+    // Verify token with our own secret — this is the ONLY verification path.
+    // Auth0 tokens are not accepted here; users must log in via our /auth/login
+    // endpoint which issues our own JWTs.
+    let decoded;
     try {
       decoded = verifyToken(token, process.env.JWT_ACCESS_SECRET!);
-    } catch (jwtError) {
-      // If regular JWT fails, try Auth0 token verification
-      try {
-        // For Auth0 tokens, we need to verify differently
-        // This is a simplified version - in production, you'd verify with Auth0's public key
-        const auth0Decoded = jwt.decode(token) as any;
-        
-        if (auth0Decoded && auth0Decoded.sub) {
-          // Auth0 token format
-          decoded = {
-            userId: auth0Decoded.sub,
-            email: auth0Decoded.email,
-          };
-          isAuth0Token = true;
-        } else {
-          throw new Error('Invalid token format');
-        }
-      } catch (auth0Error) {
-        res.status(401).json({
-          success: false,
-          error: 'Invalid or expired token',
-        });
-        return;
-      }
+    } catch {
+      res.status(401).json({ success: false, error: 'Invalid or expired token' });
+      return;
     }
 
-    // Check if MongoDB is connected
+    // Check DB connectivity — in production, never bypass with a mock user
     const isMongoConnected = mongoose.connection.readyState === 1;
-    
     if (!isMongoConnected) {
-      // If no database connection, create a mock user for development
-      logger.warn('No database connection - using mock user for development');
-      req.user = {
-        userId: decoded.userId,
-        email: decoded.email || 'dev@example.com',
-        role: 'free',
-      };
+      if (process.env.NODE_ENV === 'production') {
+        res.status(503).json({ success: false, error: 'Service temporarily unavailable' });
+        return;
+      }
+      // Development only: allow request through with token payload
+      logger.warn('No DB connection — using token payload as user (dev only)');
+      req.user = { userId: decoded.userId, email: decoded.email || '', role: 'free' };
       next();
       return;
     }
 
-    // For Auth0 tokens, we might need to find user by email instead of ID
-    let user;
-    if (isAuth0Token) {
-      // Try to find user by Auth0 sub first, then by email
-      user = await User.findOne({
-        $or: [
-          { _id: decoded.userId },
-          { email: decoded.email }
-        ]
-      });
-      
-      // If user doesn't exist, create a basic profile for Auth0 users
-      if (!user && decoded.email) {
-        try {
-          user = new User({
-            email: decoded.email,
-            password: 'auth0-managed', // Placeholder for Auth0 users
-            profile: {
-              firstName: decoded.email.split('@')[0] || 'User',
-              lastName: '',
-            },
-            preferences: {
-              role: '',
-              experienceLevel: 'entry',
-              industries: [],
-              interviewTypes: [],
-            },
-            auth: {
-              isVerified: true, // Auth0 users are pre-verified
-              lastLogin: new Date(),
-            },
-          });
-          await user.save();
-          logger.info(`Auto-created user profile for Auth0 user: ${decoded.email}`);
-        } catch (createError) {
-          logger.error('Failed to create Auth0 user profile:', createError);
-          res.status(500).json({
-            success: false,
-            error: 'Failed to create user profile',
-          });
-          return;
-        }
-      }
-    } else {
-      // Regular JWT token - find by ID
-      user = await User.findById(decoded.userId);
-    }
-
+    const user = await User.findById(decoded.userId);
     if (!user) {
-      res.status(401).json({
-        success: false,
-        error: 'User not found',
-      });
+      res.status(401).json({ success: false, error: 'User not found' });
       return;
     }
 
-    // Check if account is locked (skip for Auth0 users)
-    if (!isAuth0Token && user.isAccountLocked()) {
-      res.status(423).json({
-        success: false,
-        error: 'Account is locked',
-      });
+    if (user.isAccountLocked()) {
+      res.status(423).json({ success: false, error: 'Account is locked' });
       return;
     }
 
-    // Attach user info to request
     req.user = {
       userId: user._id.toString(),
       email: user.email,
@@ -153,10 +72,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     next();
   } catch (error: any) {
     logger.error('Authentication error:', error);
-    res.status(401).json({
-      success: false,
-      error: 'Authentication failed',
-    });
+    res.status(401).json({ success: false, error: 'Authentication failed' });
   }
 }
 
@@ -164,29 +80,21 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
 export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const token = extractTokenFromRequest(req);
-    
     if (token) {
       try {
         const decoded = verifyToken(token, process.env.JWT_ACCESS_SECRET!);
         const user = await User.findById(decoded.userId);
-        
         if (user && !user.isAccountLocked()) {
-          req.user = {
-            userId: user._id.toString(),
-            email: user.email,
-            role: user.subscription.plan,
-          };
+          req.user = { userId: user._id.toString(), email: user.email, role: user.subscription.plan };
         }
-      } catch (error) {
+      } catch {
         // Ignore token errors in optional auth
-        logger.debug('Optional auth token error:', error);
       }
     }
-    
     next();
   } catch (error: any) {
     logger.error('Optional auth error:', error);
-    next(); // Continue even if there's an error
+    next();
   }
 }
 
@@ -194,24 +102,15 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
 export function requireRole(roles: string | string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
-      res.status(401).json({
-        success: false,
-        error: 'Authentication required',
-      });
+      res.status(401).json({ success: false, error: 'Authentication required' });
       return;
     }
-
     const userRole = req.user.role || 'free';
     const allowedRoles = Array.isArray(roles) ? roles : [roles];
-    
     if (!allowedRoles.includes(userRole)) {
-      res.status(403).json({
-        success: false,
-        error: 'Insufficient permissions',
-      });
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
       return;
     }
-
     next();
   };
 }
@@ -219,75 +118,42 @@ export function requireRole(roles: string | string[]) {
 // Admin only middleware
 export async function requireAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.user) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required',
-    });
+    res.status(401).json({ success: false, error: 'Authentication required' });
     return;
   }
-
   try {
-    // Get user from database to check admin role
     const user = await User.findById(req.user.userId);
-    
     if (!user) {
-      res.status(404).json({
-        success: false,
-        error: 'User not found',
-      });
+      res.status(404).json({ success: false, error: 'User not found' });
       return;
     }
-
-    // Check if user has admin role
     if (user.auth.role !== 'admin') {
-      res.status(403).json({
-        success: false,
-        error: 'Admin access required',
-        message: 'You do not have permission to access this resource',
-      });
+      res.status(403).json({ success: false, error: 'Admin access required' });
       return;
     }
-
     next();
   } catch (error: any) {
     logger.error('Admin authorization error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Authorization failed',
-      message: error.message,
-    });
+    res.status(500).json({ success: false, error: 'Authorization failed' });
   }
 }
 
-// Rate limiting by user
-export function rateLimitByUser(maxRequests: number = 100, windowMs: number = 15 * 60 * 1000) {
+// Rate limiting by user (in-memory, per-process)
+export function rateLimitByUser(maxRequests = 100, windowMs = 15 * 60 * 1000) {
   const userRequests = new Map<string, { count: number; resetTime: number }>();
-
   return (req: Request, res: Response, next: NextFunction): void => {
-    const userId = req.user?.userId || req.ip;
+    const userId = req.user?.userId || req.ip || 'unknown';
     const now = Date.now();
-    
-    if (!userId) {
-      next();
-      return;
-    }
-    
     const userLimit = userRequests.get(userId);
-    
     if (!userLimit || now > userLimit.resetTime) {
       userRequests.set(userId, { count: 1, resetTime: now + windowMs });
       next();
       return;
     }
-    
     if (userLimit.count >= maxRequests) {
-      res.status(429).json({
-        success: false,
-        error: 'Too many requests, please try again later',
-      });
+      res.status(429).json({ success: false, error: 'Too many requests, please try again later' });
       return;
     }
-    
     userLimit.count++;
     next();
   };

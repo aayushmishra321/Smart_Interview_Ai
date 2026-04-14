@@ -194,40 +194,25 @@ router.post('/create-profile', async (req: Request, res: Response): Promise<void
 
     // Check if MongoDB is connected
     const isMongoConnected = mongoose.connection.readyState === 1;
-    
-    if (!isMongoConnected) {
-      // If no database connection, return a mock user for development
-      logger.warn('No database connection - returning mock user profile for development');
-      const mockUser = {
-        id: 'dev-user-' + Date.now(),
-        email,
-        profile: profile || {
-          firstName: email.split('@')[0] || 'Dev',
-          lastName: 'User',
-        },
-        preferences: preferences || {
-          role: '',
-          experienceLevel: 'entry',
-          industries: [],
-          interviewTypes: [],
-        },
-        subscription: {
-          plan: 'free',
-          status: 'active',
-        },
-        stats: {
-          totalInterviews: 0,
-          averageScore: 0,
-          improvementRate: 0,
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
 
+    if (!isMongoConnected) {
+      if (process.env.NODE_ENV === 'production') {
+        res.status(503).json({ success: false, error: 'Service temporarily unavailable' });
+        return;
+      }
+      // Development only: return a mock profile
+      logger.warn('No database connection - returning mock user profile for development');
       res.json({
         success: true,
-        data: mockUser,
-        message: 'Profile created successfully (development mode)',
+        data: {
+          id: 'dev-user-' + Date.now(),
+          email,
+          profile: profile || { firstName: email.split('@')[0] || 'Dev', lastName: 'User' },
+          preferences: preferences || { role: '', experienceLevel: 'entry', industries: [], interviewTypes: [] },
+          subscription: { plan: 'free', status: 'active' },
+          stats: { totalInterviews: 0, averageScore: 0, improvementRate: 0 },
+        },
+        message: 'Profile created (development mode)',
       });
       return;
     }

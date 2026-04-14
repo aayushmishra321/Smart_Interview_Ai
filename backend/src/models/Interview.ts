@@ -225,16 +225,16 @@ const interviewSchema = new Schema<IInterview>({
       default: null,
     },
     examples: [{
-      input: String,
-      output: String,
-      explanation: String,
+      input: { type: Schema.Types.Mixed, default: null },
+      output: { type: Schema.Types.Mixed, default: null },
+      explanation: { type: String, default: null },
     }],
     constraints: [{
       type: String,
     }],
     testCases: [{
-      input: String,
-      expectedOutput: String,
+      input: { type: Schema.Types.Mixed, default: null },
+      expectedOutput: { type: Schema.Types.Mixed, default: null },
     }],
   }],
   responses: [{
@@ -264,9 +264,9 @@ const interviewSchema = new Schema<IInterview>({
         default: null,
       },
       testResults: [{
-        input: String,
-        expectedOutput: String,
-        actualOutput: String,
+        input: { type: Schema.Types.Mixed, default: null },
+        expectedOutput: { type: Schema.Types.Mixed, default: null },
+        actualOutput: { type: Schema.Types.Mixed, default: null },
         passed: Boolean,
       }],
     },
@@ -391,7 +391,7 @@ const interviewSchema = new Schema<IInterview>({
 
 // Indexes
 interviewSchema.index({ userId: 1, createdAt: -1 });
-interviewSchema.index({ status: 1 });
+// status index is defined inline on the field — no duplicate needed
 interviewSchema.index({ type: 1 });
 interviewSchema.index({ 'settings.role': 1 });
 interviewSchema.index({ 'analysis.overallScore': -1 });

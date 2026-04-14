@@ -174,32 +174,32 @@ class APIService {
   }
 
   private handleError(error: any): APIResponse<any> {
-    console.error('API Error:', error);
-    
+    // Re-throw cancellation errors — they are intentional and callers handle them
+    if (
+      error?.code === 'ERR_CANCELED' ||
+      error?.message === 'canceled' ||
+      error?.name === 'CanceledError' ||
+      error?.name === 'AbortError'
+    ) {
+      throw error;
+    }
+
     if (error.response) {
-      // Server responded with error status
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
-      
       return {
         success: false,
-        error: error.response.data.error || error.response.data.message || 'An error occurred',
-        message: error.response.data.message,
-        details: error.response.data.details,
+        error: error.response.data?.error || error.response.data?.message || 'An error occurred',
+        message: error.response.data?.message,
+        details: error.response.data?.details,
       };
     }
-    
+
     if (error.request) {
-      // Request made but no response received
-      console.error('No response received:', error.request);
       return {
         success: false,
         error: 'No response from server. Please check your connection.',
       };
     }
-    
-    // Error in request setup
-    console.error('Request setup error:', error.message);
+
     return {
       success: false,
       error: error.message || 'Network error occurred',

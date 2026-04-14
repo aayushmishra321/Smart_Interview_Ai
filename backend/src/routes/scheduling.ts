@@ -81,8 +81,26 @@ router.post('/schedule', [
 
     // Send confirmation email
     try {
-      // TODO: Implement scheduling confirmation email
-      logger.info(`Scheduling confirmation email would be sent to user ${req.user!.userId}`);
+      const user = await (await import('../models/User')).default.findById(req.user!.userId)
+        .select('email profile.firstName');
+      if (user) {
+        await emailService.sendEmail({
+          to: user.email,
+          subject: 'Interview Scheduled — Smart Interview AI',
+          html: `
+            <h2>Interview Scheduled</h2>
+            <p>Hi ${user.profile?.firstName || 'there'},</p>
+            <p>Your <strong>${type}</strong> interview for <strong>${settings.role}</strong> has been scheduled.</p>
+            <ul>
+              <li><strong>Date/Time:</strong> ${scheduledDate.toLocaleString()}</li>
+              <li><strong>Difficulty:</strong> ${settings.difficulty}</li>
+              <li><strong>Duration:</strong> ${settings.duration} minutes</li>
+            </ul>
+            <p>We'll send you a reminder before the interview.</p>
+          `,
+        });
+        logger.info(`Scheduling confirmation email sent to ${user.email}`);
+      }
     } catch (emailError) {
       logger.error('Failed to send scheduling confirmation email:', emailError);
     }
@@ -186,8 +204,20 @@ router.put('/:id/reschedule', [
 
     // Send rescheduling confirmation email
     try {
-      // TODO: Implement rescheduling confirmation email
-      logger.info(`Rescheduling confirmation email would be sent to user ${req.user!.userId}`);
+      const user = await (await import('../models/User')).default.findById(req.user!.userId)
+        .select('email profile.firstName');
+      if (user) {
+        await emailService.sendEmail({
+          to: user.email,
+          subject: 'Interview Rescheduled — Smart Interview AI',
+          html: `
+            <h2>Interview Rescheduled</h2>
+            <p>Hi ${user.profile?.firstName || 'there'},</p>
+            <p>Your interview has been rescheduled to <strong>${newScheduledDate.toLocaleString()}</strong>.</p>
+          `,
+        });
+        logger.info(`Rescheduling confirmation email sent to ${user.email}`);
+      }
     } catch (emailError) {
       logger.error('Failed to send rescheduling confirmation email:', emailError);
     }
@@ -234,8 +264,20 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response): Promise<
 
     // Send cancellation confirmation email
     try {
-      // TODO: Implement cancellation confirmation email
-      logger.info(`Cancellation confirmation email would be sent to user ${req.user!.userId}`);
+      const user = await (await import('../models/User')).default.findById(req.user!.userId)
+        .select('email profile.firstName');
+      if (user) {
+        await emailService.sendEmail({
+          to: user.email,
+          subject: 'Interview Cancelled — Smart Interview AI',
+          html: `
+            <h2>Interview Cancelled</h2>
+            <p>Hi ${user.profile?.firstName || 'there'},</p>
+            <p>Your scheduled interview has been cancelled. You can schedule a new one anytime from your dashboard.</p>
+          `,
+        });
+        logger.info(`Cancellation email sent to ${user.email}`);
+      }
     } catch (emailError) {
       logger.error('Failed to send cancellation confirmation email:', emailError);
     }
@@ -315,26 +357,28 @@ router.post('/:id/send-reminder', asyncHandler(async (req: Request, res: Respons
     // Send reminder email
     try {
       const user = interview.userId as any;
-      // TODO: Implement reminder email template
-      logger.info(`Reminder email would be sent to ${user.email} for interview ${id}`);
-      
-      // Update reminder flag
-      if (!interview.session.metadata) {
-        interview.session.metadata = {};
-      }
+      await emailService.sendEmail({
+        to: user.email,
+        subject: 'Interview Reminder — Smart Interview AI',
+        html: `
+          <h2>Interview Reminder</h2>
+          <p>Hi ${user.profile?.firstName || 'there'},</p>
+          <p>This is a reminder that your <strong>${interview.type}</strong> interview for 
+          <strong>${interview.settings.role}</strong> is scheduled for 
+          <strong>${interview.scheduledTime?.toLocaleString()}</strong>.</p>
+          <p>Good luck!</p>
+        `,
+      });
+      logger.info(`Reminder email sent to ${user.email} for interview ${id}`);
+
+      if (!interview.session.metadata) interview.session.metadata = {};
       interview.session.metadata.reminderSent = true;
       await interview.save();
 
-      res.json({
-        success: true,
-        message: 'Reminder sent successfully',
-      });
-    } catch (emailError) {
+      res.json({ success: true, message: 'Reminder sent successfully' });
+    } catch (emailError: any) {
       logger.error('Failed to send reminder email:', emailError);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to send reminder email',
-      });
+      res.status(500).json({ success: false, error: 'Failed to send reminder email' });
     }
   } catch (error: any) {
     logger.error('Send reminder error:', error);

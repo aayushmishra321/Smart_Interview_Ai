@@ -5,53 +5,89 @@ import { Play, Lightbulb, Clock, CheckCircle, Code, Terminal, Loader2, ArrowRigh
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { apiService } from '../services/api';
-import { useInterviewStore } from '../stores/interviewStore';
-import toast from 'react-hot-toast';
+import { useInterviewStore } from '../stores/interviewStore';import toast from 'react-hot-toast';
 
 const CODE_TEMPLATES: Record<string, string> = {
-  javascript: `function solution(input) {
+  javascript: `/**
+ * @param {number[]} nums
+ * @param {number} target
+ * @return {number[]}
+ */
+function twoSum(nums, target) {
   // Write your solution here
-  
-  return result;
+  const map = {};
+  for (let i = 0; i < nums.length; i++) {
+    const complement = target - nums[i];
+    if (map[complement] !== undefined) return [map[complement], i];
+    map[nums[i]] = i;
+  }
+  return [];
 }`,
-  python: `def solution(input):
+  python: `def twoSum(nums, target):
     # Write your solution here
-    
-    return result`,
+    seen = {}
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in seen:
+            return [seen[complement], i]
+        seen[num] = i
+    return []`,
   java: `class Solution {
-    public Object solution(Object input) {
+    public int[] twoSum(int[] nums, int target) {
         // Write your solution here
-        
-        return result;
+        java.util.Map<Integer, Integer> map = new java.util.HashMap<>();
+        for (int i = 0; i < nums.length; i++) {
+            int complement = target - nums[i];
+            if (map.containsKey(complement)) return new int[]{map.get(complement), i};
+            map.put(nums[i], i);
+        }
+        return new int[]{};
     }
 }`,
   cpp: `class Solution {
 public:
-    auto solution(auto input) {
+    std::vector<int> twoSum(std::vector<int>& nums, int target) {
         // Write your solution here
-        
-        return result;
+        std::unordered_map<int,int> map;
+        for (int i = 0; i < (int)nums.size(); i++) {
+            int comp = target - nums[i];
+            if (map.count(comp)) return {map[comp], i};
+            map[nums[i]] = i;
+        }
+        return {};
     }
 };`,
-  typescript: `function solution(input: any): any {
+  typescript: `function twoSum(nums: number[], target: number): number[] {
   // Write your solution here
-  
-  return result;
+  const map: Record<number, number> = {};
+  for (let i = 0; i < nums.length; i++) {
+    const complement = target - nums[i];
+    if (map[complement] !== undefined) return [map[complement], i];
+    map[nums[i]] = i;
+  }
+  return [];
 }`,
-  c: `#include <stdio.h>
+  c: `#include <stdlib.h>
 
-int solution(int input) {
+int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
     // Write your solution here
-    
+    int* result = (int*)malloc(2 * sizeof(int));
+    *returnSize = 2;
+    for (int i = 0; i < numsSize; i++)
+        for (int j = i + 1; j < numsSize; j++)
+            if (nums[i] + nums[j] == target) { result[0] = i; result[1] = j; return result; }
     return result;
 }`,
-  csharp: `using System;
-
-class Solution {
-    public object Solution(object input) {
+  csharp: `class Solution {
+    public int[] TwoSum(int[] nums, int target) {
         // Write your solution here
-        
-        return result;
+        var map = new System.Collections.Generic.Dictionary<int,int>();
+        for (int i = 0; i < nums.Length; i++) {
+            int comp = target - nums[i];
+            if (map.ContainsKey(comp)) return new int[]{map[comp], i};
+            map[nums[i]] = i;
+        }
+        return new int[]{};
     }
 }`,
 };
@@ -63,10 +99,12 @@ export function CodingInterviewPage() {
   
   const { currentInterview, currentQuestion, getNextQuestion, submitResponse, endInterview } = useInterviewStore();
   
-  const [language, setLanguage] = useState('javascript');
-  const [code, setCode] = useState(CODE_TEMPLATES.javascript);
+  const [language, setLanguage] = useState('python');
+  const [code, setCode] = useState(CODE_TEMPLATES.python);
   const [output, setOutput] = useState('');
   const [showHint, setShowHint] = useState(false);
+  const [hints, setHints] = useState<string[]>([]);
+  const [hintsLoading, setHintsLoading] = useState(false);
   const [testsPassed, setTestsPassed] = useState(0);
   const [totalTests, setTotalTests] = useState(0);
   const [timeElapsed, setTimeElapsed] = useState(0);
@@ -99,7 +137,45 @@ export function CodingInterviewPage() {
       return;
     }
 
-    loadQuestion();
+    // If the store already has a question (set by startInterview flow),
+    // don't fire a duplicate request — just clear the loading state.
+    if (currentQuestion) {
+      setLoading(false);
+      return;
+    }
+
+    // Otherwise fetch — but only once. Use a flag to prevent StrictMode
+    // double-invoke from firing two concurrent requests.
+    let cancelled = false;
+
+    const fetchQuestion = async () => {
+      setLoading(true);
+      try {
+        await getNextQuestion();
+        if (!cancelled) setLoading(false);
+      } catch (error: any) {
+        if (cancelled) return;
+        // Ignore cancel errors — they're harmless race conditions
+        if (
+          error?.code === 'ERR_CANCELED' ||
+          error?.message === 'canceled' ||
+          error?.name === 'CanceledError'
+        ) {
+          setLoading(false);
+          return;
+        }
+        console.error('Failed to load question:', error);
+        toast.error('Failed to load question');
+        setLoading(false);
+      }
+    };
+
+    fetchQuestion();
+
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interviewId]);
 
   const loadQuestion = async () => {
@@ -107,16 +183,64 @@ export function CodingInterviewPage() {
     try {
       await getNextQuestion();
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
+      // Ignore cancel errors — harmless race condition
+      if (
+        error?.code === 'ERR_CANCELED' ||
+        error?.message === 'canceled' ||
+        error?.name === 'CanceledError'
+      ) {
+        setLoading(false);
+        return;
+      }
       console.error('Failed to load question:', error);
       toast.error('Failed to load question');
       setLoading(false);
     }
   };
 
+  // When question changes, reset code to template and load hints
+  useEffect(() => {
+    if (!currentQuestion) return;
+    setCode(CODE_TEMPLATES[language] || CODE_TEMPLATES.python);
+    setOutput('');
+    setTestsPassed(0);
+    setTotalTests(0);
+    setHints([]);
+    // Seed hints from followUpQuestions immediately
+    const staticHints = (currentQuestion as any).followUpQuestions || [];
+    if (staticHints.length > 0) setHints(staticHints);
+  }, [currentQuestion?.id]);
+
   const handleLanguageChange = (newLanguage: string) => {
     setLanguage(newLanguage);
-    setCode(CODE_TEMPLATES[newLanguage as keyof typeof CODE_TEMPLATES] || CODE_TEMPLATES.javascript);
+    setCode(CODE_TEMPLATES[newLanguage as keyof typeof CODE_TEMPLATES] || CODE_TEMPLATES.python);
+  };
+
+  const fetchDynamicHints = async () => {
+    if (!currentQuestion) return;
+    setHintsLoading(true);
+    try {
+      const res = await apiService.post('/code/hints', {
+        questionTitle: (currentQuestion as any).text || '',
+        questionDescription: (currentQuestion as any).description || '',
+        language,
+      });
+      if (res.success && (res.data as any)?.hints?.length > 0) {
+        setHints((res.data as any).hints);
+      }
+    } catch {
+      // fallback to static hints already set
+    } finally {
+      setHintsLoading(false);
+    }
+  };
+
+  const handleToggleHints = async () => {
+    if (!showHint && hints.length === 0) {
+      await fetchDynamicHints();
+    }
+    setShowHint(prev => !prev);
   };
 
   const handleRunCode = async () => {
@@ -130,20 +254,22 @@ export function CodingInterviewPage() {
     setExecutionTime(null);
 
     try {
-      // Parse test cases from question
-      const testCases = (currentQuestion as any).testCases || [
-        { input: 'test input', expectedOutput: 'test output' }
-      ];
+      // Normalize testCases — input/expectedOutput may be objects or arrays from DB
+      const rawTestCases: any[] = (currentQuestion as any).testCases || [];
+      const testCases = rawTestCases.length > 0
+        ? rawTestCases.map((tc: any) => ({
+            input: typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input),
+            expectedOutput: typeof tc.expectedOutput === 'string'
+              ? tc.expectedOutput
+              : JSON.stringify(tc.expectedOutput),
+          }))
+        : [{ input: '', expectedOutput: '' }]; // fallback so execution still runs
 
       const response = await apiService.post('/code/execute-tests', {
         language,
         code,
         testCases,
       });
-      console.log("language: ", language);
-      console.log("code: ", code);
-      console.log("testcaase: ", testCases);
-      console.log("Response:", response)
 
       if (response.success && response.data) {
         const data = response.data as any;
@@ -205,40 +331,39 @@ export function CodingInterviewPage() {
     }
 
     try {
-      // Submit the code solution
+      // 1. Submit the current solution
       await submitResponse({
         questionId: currentQuestion.id,
         answer: code,
-        codeSubmission: {
-          language,
-          code,
-          testResults: [],
-        },
+        codeSubmission: { language, code, testResults: [] },
         duration: timeElapsed,
       });
 
       toast.success('Solution submitted!');
 
-      // Check if there are more questions
-      const interview = currentInterview || await apiService.get(`/interview/${interviewId}`).then(r => r.data);
-      const interviewData = interview as any;
-      const totalQuestions = interviewData?.questions?.length || 0;
-      const answeredQuestions = interviewData?.responses?.length || 0;
+      // 2. Ask backend for the next question.
+      //    getNextQuestion() sets currentQuestion to null if completed=true.
+      await getNextQuestion();
 
-      if (answeredQuestions + 1 < totalQuestions) {
-        // Load next question
+      // 3. Read the updated store state AFTER the await
+      const nextQ = useInterviewStore.getState().currentQuestion;
+
+      if (nextQ) {
+        // More questions — advance UI
         setQuestionIndex(prev => prev + 1);
-        setCode(CODE_TEMPLATES[language]);
+        setCode(CODE_TEMPLATES[language] || CODE_TEMPLATES.python);
         setOutput('');
         setTestsPassed(0);
         setTotalTests(0);
-        await loadQuestion();
       } else {
-        // End interview and go to feedback
+        // No more questions — end interview and go to feedback
+        toast.loading('Finishing interview…', { id: 'ending' });
         await endInterview();
-        const interviewData = interview as any;
-        const finalInterviewId = interviewData?._id || interviewData?.id || interviewId;
-        navigate(`/feedback/${finalInterviewId}`);
+        toast.dismiss('ending');
+        const finalId = (useInterviewStore.getState().currentInterview as any)?._id
+          || useInterviewStore.getState().currentInterview?.id
+          || interviewId;
+        navigate(`/feedback/${finalId}`);
       }
     } catch (error: any) {
       console.error('Submit error:', error);
@@ -325,21 +450,26 @@ export function CodingInterviewPage() {
                   <div>
                     <h3 className="text-base sm:text-lg mb-2">Examples</h3>
                     <div className="space-y-2 sm:space-y-3">
-                      {problem.examples.map((example: any, index: number) => (
-                        <div key={index} className="bg-secondary rounded-lg p-4">
-                          <p className="text-sm mb-1">
-                            <span className="text-muted-foreground">Input:</span> {example.input}
-                          </p>
-                          <p className="text-sm mb-1">
-                            <span className="text-muted-foreground">Output:</span> {example.output}
-                          </p>
-                          {example.explanation && (
-                            <p className="text-sm text-muted-foreground mt-2">
-                              Explanation: {example.explanation}
+                      {problem.examples.map((example: any, index: number) => {
+                        const fmtVal = (v: any) =>
+                          v === null || v === undefined ? '' :
+                          typeof v === 'string' ? v : JSON.stringify(v);
+                        return (
+                          <div key={index} className="bg-secondary rounded-lg p-4">
+                            <p className="text-sm mb-1">
+                              <span className="text-muted-foreground">Input:</span> {fmtVal(example.input)}
                             </p>
-                          )}
-                        </div>
-                      ))}
+                            <p className="text-sm mb-1">
+                              <span className="text-muted-foreground">Output:</span> {fmtVal(example.output)}
+                            </p>
+                            {example.explanation && (
+                              <p className="text-sm text-muted-foreground mt-2">
+                                Explanation: {example.explanation}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -361,10 +491,10 @@ export function CodingInterviewPage() {
             </Card>
 
             {/* AI Hints */}
-            {problem.hints && problem.hints.length > 0 && (
+            {(hints.length > 0 || currentQuestion) && (
               <Card className='p-6'>
                 <button
-                  onClick={() => setShowHint(!showHint)}
+                  onClick={handleToggleHints}
                   className="flex items-center justify-between w-full"
                 >
                   <div className="flex items-center gap-2">
@@ -372,20 +502,29 @@ export function CodingInterviewPage() {
                     <h3 className="text-base sm:text-lg">AI Hints</h3>
                   </div>
                   <span className="text-xs sm:text-sm text-muted-foreground">
-                    {showHint ? 'Hide' : 'Show'} hints
+                    {hintsLoading ? 'Loading...' : showHint ? 'Hide' : 'Show'} hints
                   </span>
                 </button>
                 
                 {showHint && (
                   <div className="mt-4 space-y-2">
-                    {problem.hints.map((hint: string, index: number) => (
-                      <div key={index} className="flex items-start gap-2 text-sm text-muted-foreground">
-                        <div className="w-6 h-6 bg-yellow-500/20 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                          <span className="text-yellow-400 text-xs">{index + 1}</span>
-                        </div>
-                        <p>{hint}</p>
+                    {hintsLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating hints...
                       </div>
-                    ))}
+                    ) : hints.length > 0 ? (
+                      hints.map((hint: string, index: number) => (
+                        <div key={index} className="flex items-start gap-2 text-sm text-muted-foreground">
+                          <div className="w-6 h-6 bg-yellow-500/20 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-yellow-400 text-xs">{index + 1}</span>
+                          </div>
+                          <p>{hint}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No hints available.</p>
+                    )}
                   </div>
                 )}
               </Card>

@@ -135,104 +135,65 @@ export function ResumeAnalyzerPage() {
     }
   };
 
-  const handleDownload = async () => {
-    if (!resumeData || !resumeData._id) {
-      toast.error('No resume available to download');
-      return;
-    }
+  const getApiBase = () => {
+    const raw = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api';
+    // Strip trailing /api so we can append /api/resume/:id/...
+    return raw.replace(/\/api\/?$/, '');
+  };
 
+  // Shared helper — fetches file through backend (Cloudinary never exposed)
+  const fetchResumeBlob = async (endpoint: 'view' | 'download'): Promise<{ blob: Blob; filename: string } | null> => {
+    if (!resumeData?._id) {
+      toast.error('No resume available');
+      return null;
+    }
+    const token = localStorage.getItem('accessToken');
+    const url = `${getApiBase()}/api/resume/${resumeData._id}/${endpoint}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const blob = await res.blob();
+    const filename = resumeData.fileName || 'resume.pdf';
+    return { blob, filename };
+  };
+
+  const handleDownload = async () => {
+    const toastId = 'download';
+    toast.loading('Preparing download…', { id: toastId });
     try {
-      console.log('Downloading resume:', resumeData._id);
-      toast.loading('Preparing download...', { id: 'download' });
-      
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
-      const downloadUrl = `${apiBaseUrl}/resume/${resumeData._id}/download`;
-      const token = localStorage.getItem('accessToken');
-      
-      // Fetch the file with auth
-      const response = await fetch(downloadUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error('Download failed');
-      }
-      
-      // Get the blob and create download link
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const result = await fetchResumeBlob('download');
+      if (!result) { toast.dismiss(toastId); return; }
+      const blobUrl = URL.createObjectURL(result.blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = resumeData.fileName || 'resume.pdf';
+      a.href = blobUrl;
+      a.download = result.filename;
       document.body.appendChild(a);
       a.click();
-      
-      // Cleanup
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      }, 100);
-      
-      toast.success('Resume downloaded successfully!', { id: 'download' });
-    } catch (error: any) {
-      console.error('Download error:', error);
-      toast.error('Failed to download resume', { id: 'download' });
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      toast.success('Download started!', { id: toastId });
+    } catch (err: any) {
+      toast.error('Download failed', { id: toastId });
     }
   };
 
   const handleViewResume = async () => {
-    if (!resumeData || !resumeData._id) {
-      toast.error('No resume file available');
-      return;
-    }
-
+    const toastId = 'view-resume';
+    toast.loading('Opening resume…', { id: toastId });
     try {
-      console.log('Opening resume:', resumeData._id);
-      toast.loading('Loading resume...', { id: 'view-resume' });
-      
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
-      const viewUrl = `${apiBaseUrl}/resume/${resumeData._id}/view`;
-      const token = localStorage.getItem('accessToken');
-      
-      // Fetch the file with auth
-      const response = await fetch(viewUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to load resume');
-      }
-      
-      // Get content type
-      const contentType = response.headers.get('content-type');
-      console.log('Response content type:', contentType);
-      
-      // Create blob and open in new tab
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      
-      const newWindow = window.open(blobUrl, '_blank', 'noopener,noreferrer');
-      
-      if (!newWindow) {
-        toast.error('Popup blocked. Please allow popups for this site.', { id: 'view-resume' });
-        window.URL.revokeObjectURL(blobUrl);
+      const result = await fetchResumeBlob('view');
+      if (!result) { toast.dismiss(toastId); return; }
+      const blobUrl = URL.createObjectURL(result.blob);
+      const win = window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        toast.error('Popup blocked — please allow popups for this site', { id: toastId });
+        URL.revokeObjectURL(blobUrl);
         return;
       }
-      
-      toast.success('Resume opened in new tab', { id: 'view-resume' });
-      
-      // Cleanup after window loads
-      setTimeout(() => {
-        window.URL.revokeObjectURL(blobUrl);
-      }, 5000);
-      
-    } catch (error: any) {
-      console.error('View resume error:', error);
-      toast.error('Failed to open resume', { id: 'view-resume' });
+      toast.success('Opened in new tab', { id: toastId });
+      // Revoke after the tab has had time to load the blob
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch (err: any) {
+      toast.error('Failed to open resume', { id: toastId });
     }
   };
 
@@ -470,15 +431,13 @@ export function ResumeAnalyzerPage() {
                 </div>
 
                 <div className="pt-4 border-t border-border">
-                  <a 
-                    href={resumeData.fileUrl} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
+                  <button
+                    onClick={handleViewResume}
                     className="text-primary hover:underline text-sm flex items-center gap-2"
                   >
                     <FileText className="w-4 h-4" />
                     View Original Resume
-                  </a>
+                  </button>
                 </div>
               </div>
             </Card>

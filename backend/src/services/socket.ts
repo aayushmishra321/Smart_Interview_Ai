@@ -1,7 +1,27 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import axios from 'axios';
 import logger from '../utils/logger';
 import webrtcService from './webrtc';
+
+interface AuthenticatedSocket extends Socket {
+  userId?: string;
+  interviewId?: string;
+}
+
+// ── Python AI server helper ───────────────────────────────────────────────────
+async function callPythonAI(path: string, payload: any): Promise<any> {
+  const url = process.env.PYTHON_AI_SERVER_URL;
+  const key = process.env.PYTHON_AI_SERVER_API_KEY;
+  if (!url || !key) {
+    throw new Error('PYTHON_AI_SERVER_URL or PYTHON_AI_SERVER_API_KEY not configured');
+  }
+  const res = await axios.post(`${url}${path}`, payload, {
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    timeout: 10000,
+  });
+  return res.data?.data ?? res.data;
+}
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -84,41 +104,86 @@ export function setupSocketHandlers(io: Server) {
       logger.info(`Analysis update: ${analysisType} for user ${socket.userId}`);
     });
 
-    // Video frame analysis
+    // Video frame analysis — calls Python AI server
     socket.on('video-frame', async (data: any) => {
       const { interviewId, frameData, timestamp } = data;
-      
+
       try {
-        // Process video frame (call Python AI server)
-        // This is a placeholder - actual implementation would call the AI server
+        if (!frameData) {
+          socket.emit('video-analysis-error', { error: 'No frame data provided' });
+          return;
+        }
+
+        const result = await callPythonAI('/api/video/analyze-frame', {
+          image_data: frameData,
+          timestamp: timestamp ?? Date.now(),
+        });
+
         socket.emit('video-analysis', {
-          emotions: {
-            happy: 0.7,
-            confident: 0.8,
-            nervous: 0.2,
-          },
-          eyeContact: 0.85,
+          emotions: result.face_analysis?.emotions ?? {},
+          eyeContact: result.face_analysis?.eye_contact_score ?? 0,
+          posture: result.pose_analysis?.posture_score ?? 0,
+          faceDetected: result.face_analysis?.face_detected ?? false,
+          frameQuality: result.frame_quality?.quality_assessment ?? 'unknown',
           timestamp,
         });
-      } catch (error) {
-        logger.error('Video frame analysis error:', error);
+      } catch (error: any) {
+        logger.error('Video frame analysis error:', error.message);
+        socket.emit('video-analysis-error', { error: error.message });
       }
     });
 
-    // Audio chunk analysis
+    // Audio chunk analysis — calls Python AI server
     socket.on('audio-chunk', async (data: any) => {
       const { interviewId, audioData, transcript } = data;
-      
+
       try {
-        // Process audio chunk (call Python AI server)
-        socket.emit('audio-analysis', {
-          speechRate: 150,
-          fillerWords: ['um', 'uh'],
-          clarityScore: 0.85,
-          timestamp: Date.now(),
-        });
-      } catch (error) {
-        logger.error('Audio chunk analysis error:', error);
+        // If transcript provided, run filler-word + speech pattern analysis
+        if (transcript) {
+          const [fillerResult, patternResult] = await Promise.all([
+            callPythonAI('/api/audio/filler-words', {
+              transcript,
+              timestamps: [],
+            }),
+            callPythonAI('/api/audio/filler-words', {
+              transcript,
+              timestamps: [],
+            }),
+          ]);
+
+          socket.emit('audio-analysis', {
+            fillerWords: fillerResult.filler_frequency ?? {},
+            fillerPercentage: fillerResult.filler_percentage ?? 0,
+            totalWords: fillerResult.total_words ?? 0,
+            assessment: fillerResult.assessment ?? '',
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        // If raw audio data provided, run full audio analysis
+        if (audioData) {
+          const result = await callPythonAI('/api/audio/analyze', {
+            audio_data: audioData,
+            sample_rate: 44100,
+            duration: 0,
+          });
+
+          socket.emit('audio-analysis', {
+            speechRate: result.speech_rate?.words_per_minute ?? 0,
+            speechRateAssessment: result.speech_rate?.assessment ?? '',
+            clarityScore: result.clarity_score ?? 0,
+            volumeAssessment: result.volume_analysis?.volume_assessment ?? '',
+            pauseCount: result.pause_analysis?.length ?? 0,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        socket.emit('audio-analysis-error', { error: 'No audio data or transcript provided' });
+      } catch (error: any) {
+        logger.error('Audio chunk analysis error:', error.message);
+        socket.emit('audio-analysis-error', { error: error.message });
       }
     });
 

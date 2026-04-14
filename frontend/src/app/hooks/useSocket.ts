@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { useAuthStore } from '../stores/authStore';
 
 interface UseSocketOptions {
   autoConnect?: boolean;
@@ -33,19 +32,23 @@ export function useSocket(options: UseSocketOptions = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { getAccessToken } = useAuthStore();
 
   useEffect(() => {
     if (!autoConnect) return;
 
-    const token = getAccessToken();
+    const token = localStorage.getItem('accessToken');
     if (!token) {
       setError('No authentication token available');
       return;
     }
 
+    // Socket.IO connects to the backend root (not /api).
+    // VITE_API_BASE_URL may include /api suffix — strip it.
+    const rawBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+    const socketUrl = rawBase.replace(/\/api\/?$/, '');
+
     // Create socket connection
-    const socket = io(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001', {
+    const socket = io(socketUrl, {
       auth: {
         token,
       },
@@ -84,7 +87,7 @@ export function useSocket(options: UseSocketOptions = {}) {
     return () => {
       socket.disconnect();
     };
-  }, [autoConnect, getAccessToken]);
+  }, [autoConnect]);
 
   // Join interview room
   const joinInterview = (interviewId: string) => {

@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import mongoose from 'mongoose';
 import { body, validationResult } from 'express-validator';
 import Interview from '../models/Interview';
@@ -29,19 +29,16 @@ router.post('/create', [
     .isInt({ min: 15, max: 120 })
     .withMessage('Duration must be between 15 and 120 minutes'),
 ], asyncHandler(async (req, res) => {
-  console.log('=== POST /api/interview/create ===');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('User:', req.user);
-  console.log('Request body:', JSON.stringify(req.body, null, 2));
-  console.log('Request headers:', {
-    'content-type': req.headers['content-type'],
-    'authorization': req.headers.authorization ? 'Bearer ***' : 'none',
-  });
+  logger.info('POST /api/interview/create');
+  
+  
+  
+  
   
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.error('=== VALIDATION FAILED ===');
-    console.error('Validation errors:', JSON.stringify(errors.array(), null, 2));
+    
+    
     
     // Format errors for better readability
     const formattedErrors = errors.array().map((err: any) => ({
@@ -51,7 +48,7 @@ router.post('/create', [
       location: err.location || 'body',
     }));
     
-    console.error('Formatted errors:', formattedErrors);
+    
     
     return res.status(400).json({
       success: false,
@@ -73,10 +70,10 @@ router.post('/create', [
 
   const { type, settings, resumeId } = req.body;
   
-  console.log('Validated data:');
-  console.log('  Type:', type);
-  console.log('  Settings:', settings);
-  console.log('  Resume ID:', resumeId || 'none');
+  
+  
+  
+  
 
   try {
     console.log(`Creating ${type} interview for user ${req.user.userId}`);
@@ -91,22 +88,22 @@ router.post('/create', [
       });
       if (resume) {
         resumeData = resume;
-        console.log('Resume found and will be used for question generation');
+        
       } else {
-        console.log('Resume not found with provided ID');
+        
       }
     } else {
       // Get latest resume
-      console.log('No resumeId provided, looking for latest resume');
+      
       const latestResume = await Resume.findOne({
         userId: req.user.userId,
       }).sort({ uploadDate: -1 });
       
       if (latestResume) {
         resumeData = latestResume;
-        console.log('Latest resume found and will be used');
+        
       } else {
-        console.log('No resume found for user');
+        
       }
     }
 
@@ -138,14 +135,14 @@ router.post('/create', [
         projects: resumeData.parsedData.projects || [],
         summary: resumeData.parsedData.summary || '',
       };
-      console.log('Resume context added to question generation');
+      
     }
 
     logger.info(`Generating ${questionParams.count} questions for ${settings.role} with resume context: ${!!resumeData}`);
-    console.log('Question generation params:', JSON.stringify(questionParams, null, 2));
+    
 
     // Generate questions using Gemini AI with timeout
-    console.log('Starting question generation with 30s timeout...');
+    
     const questionGenerationPromise = geminiService.generateInterviewQuestions(questionParams);
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('Question generation timeout')), 30000)
@@ -156,7 +153,7 @@ router.post('/create', [
       questions = await Promise.race([questionGenerationPromise, timeoutPromise]) as any[];
       console.log(`Generated ${questions.length} questions successfully`);
     } catch (timeoutError: any) {
-      console.warn('Question generation timed out, using fallback questions');
+      logger.warn('Question generation timed out, using fallback');
       logger.warn('Question generation timeout, using fallback');
       // Use fallback - will be handled by gemini service
       questions = await geminiService.generateInterviewQuestions(questionParams);
@@ -176,37 +173,48 @@ router.post('/create', [
         includeAudio: settings.includeAudio !== false,
         includeCoding: settings.includeCoding || false,
       },
-      questions: questions.map((q: any) => ({
-  id:
-    q.id ||
-    `q_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      questions: questions.map((q: any) => {
+        // Normalize a value to string for display, keep as-is for Mixed fields
+        const toStr = (v: any): string => {
+          if (v === null || v === undefined) return '';
+          if (typeof v === 'string') return v;
+          return JSON.stringify(v);
+        };
 
-  // ⭐ SAFE TEXT (fixes your error)
-  text:
-    q.text ||
-    q.question ||
-    q.title ||
-    q.description ||
-    `Explain ${settings.domain || settings.role}`,
+        // Normalize examples â€” input/output can be any type (Mixed)
+        const examples = (q.examples || []).map((ex: any) => ({
+          input:       ex.input       ?? null,
+          output:      ex.output      ?? null,
+          explanation: typeof ex.explanation === 'string' ? ex.explanation : toStr(ex.explanation),
+        }));
 
-  description: q.description || null,
+        // Normalize testCases â€” input/expectedOutput can be any type (Mixed)
+        const testCases = (q.testCases || []).map((tc: any) => ({
+          input:          tc.input          ?? null,
+          expectedOutput: tc.expectedOutput ?? null,
+        }));
 
-  type:
-    q.type ||
-    (type === 'skill-based' ? 'technical' : type),
+        // Normalize constraints â€” must be strings
+        const constraints = (q.constraints || []).map((c: any) =>
+          typeof c === 'string' ? c : JSON.stringify(c)
+        );
 
-  difficulty: q.difficulty || settings.difficulty,
-
-  expectedDuration: q.expectedDuration || 5,
-
-  followUpQuestions: q.followUpQuestions || [],
-
-  category: q.category || settings.domain || 'general',
-
-  examples: q.examples || [],
-  constraints: q.constraints || [],
-  testCases: q.testCases || [],
-})),
+        return {
+          id: q.id || `q_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          text: q.text || q.question || q.title || q.description || `Question about ${settings.role}`,
+          description: q.description || null,
+          type: q.type || (type === 'skill-based' ? 'technical' : type),
+          difficulty: q.difficulty || settings.difficulty,
+          expectedDuration: q.expectedDuration || 5,
+          followUpQuestions: (q.followUpQuestions || []).map((f: any) =>
+            typeof f === 'string' ? f : JSON.stringify(f)
+          ),
+          category: q.category || settings.domain || 'general',
+          examples,
+          constraints,
+          testCases,
+        };
+      }),
       responses: [],
       session: {
         startTime: null,
@@ -238,10 +246,10 @@ router.post('/create', [
     });
   } catch (error: any) {
     logger.error('Interview creation error:', error);
-    console.error('=== INTERVIEW CREATION ERROR ===');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
+    
+    
+    
+    
     
     res.status(500).json({
       success: false,
@@ -359,7 +367,7 @@ router.post('/:id/end', asyncHandler(async (req, res) => {
   }
 }));
 
-// Get next question
+// Get next question â€” returns 200 with completed:true instead of 404 when done
 router.get('/:id/next-question', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -377,15 +385,21 @@ router.get('/:id/next-question', asyncHandler(async (req, res) => {
     }
 
     // Get next unanswered question
-    const answeredQuestionIds = interview.responses.map((r: any) => r.questionId);
-    const nextQuestion = interview.questions.find((q: any) => 
-      !answeredQuestionIds.includes(q.id)
+    const answeredQuestionIds = new Set(
+      interview.responses.map((r: any) => r.questionId)
+    );
+    const nextQuestion = interview.questions.find(
+      (q: any) => !answeredQuestionIds.has(q.id)
     );
 
+    // No more questions â€” signal completion with 200, not 404
     if (!nextQuestion) {
-      return res.status(404).json({
-        success: false,
-        error: 'No more questions available',
+      return res.json({
+        success: true,
+        data: null,
+        completed: true,
+        totalQuestions: interview.questions.length,
+        answeredQuestions: interview.responses.length,
         message: 'All questions have been answered',
       });
     }
@@ -393,6 +407,9 @@ router.get('/:id/next-question', asyncHandler(async (req, res) => {
     res.json({
       success: true,
       data: nextQuestion,
+      completed: false,
+      totalQuestions: interview.questions.length,
+      answeredQuestions: interview.responses.length,
     });
   } catch (error: any) {
     logger.error('Get next question error:', error);
@@ -445,7 +462,7 @@ router.post('/:id/response', [
       });
     }
 
-    // ⭐ STEP 1 — SAVE RESPONSE FIRST (FAST)
+    // â­ STEP 1 â€” SAVE RESPONSE FIRST (FAST)
     const responseData = {
       questionId,
       answer,
@@ -460,13 +477,13 @@ router.post('/:id/response', [
       $push: { responses: responseData }
     });
 
-    // ⭐ STEP 2 — RETURN RESPONSE IMMEDIATELY (NO WAIT)
+    // â­ STEP 2 â€” RETURN RESPONSE IMMEDIATELY (NO WAIT)
     res.json({
       success: true,
       message: 'Response submitted instantly',
     });
 
-    // ⭐ STEP 3 — RUN AI ANALYSIS IN BACKGROUND (NO BLOCKING)
+    // â­ STEP 3 â€” RUN AI ANALYSIS IN BACKGROUND (NO BLOCKING)
     (async () => {
       try {
         logger.info(`Background AI analysis for question ${questionId}`);
@@ -501,7 +518,7 @@ router.post('/:id/response', [
           }
         });
 
-        logger.info("✅ Background AI analysis completed");
+        logger.info("âœ… Background AI analysis completed");
 
       } catch (err) {
         logger.error("Background AI analysis failed:", err);
@@ -887,8 +904,8 @@ router.post('/:interviewId/analyze/video', asyncHandler(async (req, res) => {
     }
 
     // Call Python AI server for video analysis
-    const pythonServerUrl = process.env.PYTHON_API_URL || 'http://localhost:8000';
-    const apiKey = process.env.PYTHON_AI_SERVER_API_KEY || 'smart-interview-ai-python-server-key-2024';
+    const pythonServerUrl = process.env.PYTHON_AI_SERVER_URL || 'http://localhost:8000';
+    const apiKey = process.env.PYTHON_AI_SERVER_API_KEY;
 
     const axios = require('axios');
     const analysisResponse = await axios.post(
@@ -989,8 +1006,8 @@ router.post('/:interviewId/analyze/audio', asyncHandler(async (req, res) => {
     }
 
     // Call Python AI server for audio analysis
-    const pythonServerUrl = process.env.PYTHON_API_URL || 'http://localhost:8000';
-    const apiKey = process.env.PYTHON_AI_SERVER_API_KEY || 'smart-interview-ai-python-server-key-2024';
+    const pythonServerUrl = process.env.PYTHON_AI_SERVER_URL || 'http://localhost:8000';
+    const apiKey = process.env.PYTHON_AI_SERVER_API_KEY;
 
     const axios = require('axios');
     const analysisResponse = await axios.post(
@@ -1195,3 +1212,4 @@ function calculateEmotionSummary(emotionAnalysis: any[]): any {
 }
 
 export default router;
+

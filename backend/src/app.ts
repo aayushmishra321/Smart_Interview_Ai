@@ -15,6 +15,7 @@ import codeExecutionRoutes from './routes/codeExecution';
 import paymentRoutes from './routes/payment';
 import practiceRoutes from './routes/practice';
 import schedulingRoutes from './routes/scheduling';
+import healthRoutes from './routes/health';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
@@ -57,17 +58,19 @@ export function createApp(): Application {
   // CORS configuration
   const corsOptions = {
     origin: function (origin: string | undefined, callback: Function) {
-      // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
-      
+
       const allowedOrigins = [
         'http://localhost:5175',
         'http://localhost:5174',
         'http://localhost:3000',
-        process.env.FRONTEND_URL
-      ].filter(Boolean);
-      
-      if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'test') {
+        process.env.FRONTEND_URL,
+      ].filter(Boolean) as string[];
+
+      // Allow any *.vercel.app preview deployment
+      const isVercelPreview = /^https:\/\/.*\.vercel\.app$/.test(origin);
+
+      if (allowedOrigins.includes(origin) || isVercelPreview || process.env.NODE_ENV === 'test') {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -133,6 +136,7 @@ export function createApp(): Application {
   app.use('/api/payment', apiLimiter, paymentRoutes);
   app.use('/api/practice', apiLimiter, authenticateToken, practiceRoutes);
   app.use('/api/scheduling', apiLimiter, authenticateToken, schedulingRoutes);
+  app.use('/api/health', healthRoutes); // no auth — public health check
 
   // Error handling middleware (must be last)
   app.use(notFound);

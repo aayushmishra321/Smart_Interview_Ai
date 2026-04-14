@@ -334,12 +334,16 @@ export interface OnboardingForm {
 
 export interface InterviewSetupForm {
   type: InterviewType;
-  role: string;
-  difficulty: string;
-  duration: number;
-  includeVideo: boolean;
-  includeAudio: boolean;
-  includeCoding: boolean;
+  resumeId?: string;
+  settings: {
+    role: string;
+    difficulty: string;
+    duration: number;
+    includeVideo?: boolean;
+    includeAudio?: boolean;
+    includeCoding?: boolean;
+    domain?: string;
+  };
 }
 
 // Utility Types

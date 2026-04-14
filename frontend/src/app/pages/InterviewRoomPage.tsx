@@ -113,9 +113,7 @@ const styles = `
   .prog-track { height: 2px; background: #e9eef5; }
   .prog-fill  { height: 100%; transition: width 0.6s ease; background: linear-gradient(90deg, #6366f1, #a78bfa); }
 
-  /* Force VideoRecorder to fill container */
-  .ir-card video,
-  .ir-card [class*="video"] { width:100% !important; height:100% !important; object-fit:cover !important; display:block; }
+  /* VideoRecorder fills its container naturally — no overrides needed */
 
   /* ── Waveform bars ── */
   .wave-bar {
@@ -381,8 +379,8 @@ export function InterviewRoomPage() {
                 </div>
               )}
             </div>
-            <div style={{ flex:1,minHeight:0,overflow:'hidden',position:'relative' }}>
-              <VideoRecorder isRecording={isRecording} onStartRecording={startRecording} onStopRecording={stopRecording} className="h-full" />
+            <div style={{ flex:1,minHeight:0,overflow:'hidden',position:'relative',height:'100%' }}>
+              <VideoRecorder isRecording={isRecording} onStartRecording={startRecording} onStopRecording={stopRecording} />
             </div>
           </div>
 
