@@ -58,6 +58,7 @@ export function createApp(): Application {
   // CORS configuration
   const corsOptions = {
     origin: function (origin: string | undefined, callback: Function) {
+      // Allow requests with no origin (Render health checks, curl, mobile)
       if (!origin) return callback(null, true);
 
       const allowedOrigins = [
@@ -67,13 +68,26 @@ export function createApp(): Application {
         process.env.FRONTEND_URL,
       ].filter(Boolean) as string[];
 
-      // Allow any *.vercel.app preview deployment
-      const isVercelPreview = /^https:\/\/.*\.vercel\.app$/.test(origin);
+      // Allow any *.vercel.app URL (covers all preview + production deployments)
+      const isVercel = /^https:\/\/.*\.vercel\.app$/.test(origin);
+      // Allow any *.onrender.com URL (covers Render preview services)
+      const isRender = /^https:\/\/.*\.onrender\.com$/.test(origin);
 
-      if (allowedOrigins.includes(origin) || isVercelPreview || process.env.NODE_ENV === 'test') {
+      if (
+        allowedOrigins.includes(origin) ||
+        isVercel ||
+        isRender ||
+        process.env.NODE_ENV === 'test'
+      ) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        logger.warn(`CORS blocked origin: ${origin}`);
+        // In development, allow anyway to avoid blocking local testing
+        if (process.env.NODE_ENV !== 'production') {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
       }
     },
     credentials: true,
@@ -105,6 +119,17 @@ export function createApp(): Application {
       },
     }));
   }
+
+  // Root route — confirms API is live
+  app.get('/', (req, res) => {
+    res.status(200).json({
+      name: 'Smart Interview AI — Backend API',
+      status: 'running',
+      version: '1.0.0',
+      health: '/health',
+      api: '/api',
+    });
+  });
 
   // Health check endpoints
   app.get('/health', (req, res) => {
