@@ -10,10 +10,7 @@
     "test": "jest",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
-    "dev:debug": "nodemon --exec ts-node --inspect src/server.ts",
-    "clean": "rimraf dist",
-    "prebuild": "npm run clean",
-    "postbuild": "cp -r src/public dist/ || echo 'No public folder to copy'"
+    "dev:debug": "nodemon --exec ts-node --inspect src/server.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -48,6 +45,7 @@
     "socket.io": "^4.7.4",
     "socket.io-client": "^4.8.3",
     "stripe": "^20.3.1",
+    "typescript": "^5.3.3",
     "winston": "^3.11.0"
   },
   "devDependencies": {

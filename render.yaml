@@ -4,8 +4,9 @@ services:
     env: node
     region: oregon
     plan: starter
-    buildCommand: cd backend && npm ci && npm run build
-    startCommand: cd backend && npm start
+    rootDir: backend
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
     envVars:
