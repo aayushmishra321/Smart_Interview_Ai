@@ -61,7 +61,7 @@ export const logEnvironmentVariables = (): void => {
     'CLOUDINARY_CLOUD_NAME',
     'CLOUDINARY_API_KEY',
     'FRONTEND_URL',
-    'PYTHON_API_URL',
+    'PYTHON_AI_SERVER_URL',
   ];
 
   envVars.forEach(key => {
@@ -101,6 +101,6 @@ export const logServiceHealth = async (): Promise<void> => {
   logger.info(`  Cloudinary: ${cloudinaryName ? 'Configured' : 'NOT Configured'}`);
   
   // Python AI Server
-  const pythonUrl = process.env.PYTHON_API_URL;
+  const pythonUrl = process.env.PYTHON_AI_SERVER_URL;
   logger.info(`  Python AI Server: ${pythonUrl || 'NOT Configured'}`);
 };
